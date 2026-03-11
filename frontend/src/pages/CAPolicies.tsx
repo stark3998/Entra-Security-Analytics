@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import ForceGraph2D, { type ForceGraphMethods } from "react-force-graph-2d";
 import {
   fetchCAPolicies,
   fetchCAPolicy,
@@ -7,6 +8,9 @@ import {
   fetchCACoverage,
   fetchCACoverageGaps,
   fetchCACoverageSummary,
+  fetchCAOverlaps,
+  fetchCALookup,
+  resolveCALookup,
   fetchNamedLocations,
   fetchAuthStrengths,
   fetchDirectoryEntries,
@@ -14,11 +18,13 @@ import {
   type CAPolicy,
   type CoverageGap,
   type CoverageByEntity,
-  type CoverageSummary,
   type NamedLocationEntry,
   type AuthStrengthEntry,
   type DirectoryEntry,
   type CAPolicyStats,
+  type OverlapGraphNode,
+  type OverlapGraphLink,
+  type LookupPolicyResult,
 } from "../api";
 
 /* ── Mermaid dynamic import ────────────────────────────────── */
@@ -34,7 +40,7 @@ function getMermaid() {
 }
 
 /* ── Tab constants ─────────────────────────────────────────── */
-const TABS = ["Policies", "Coverage Map", "Reference Data"] as const;
+const TABS = ["Policies", "Coverage Map", "Policy Graph", "Object Lookup", "Reference Data"] as const;
 type Tab = (typeof TABS)[number];
 
 /* ── State badge helpers ───────────────────────────────────── */
@@ -143,6 +149,8 @@ export default function CAPolicies() {
       {/* ── Tab content ────────────────────────────────────── */}
       {tab === "Policies" && <PoliciesTab />}
       {tab === "Coverage Map" && <CoverageTab />}
+      {tab === "Policy Graph" && <PolicyGraphTab />}
+      {tab === "Object Lookup" && <ObjectLookupTab />}
       {tab === "Reference Data" && <ReferenceTab />}
     </div>
   );
@@ -504,6 +512,390 @@ function CoverageTab() {
             ))}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================ */
+/*  Policy Graph Tab                                                */
+/* ================================================================ */
+
+const ENTITY_COLORS: Record<string, string> = {
+  user: "#3b82f6",
+  group: "#8b5cf6",
+  application: "#f59e0b",
+  platform: "#10b981",
+  location: "#ef4444",
+  role: "#ec4899",
+};
+
+const STATE_COLORS: Record<string, string> = {
+  enabled: "#22c55e",
+  disabled: "#6b7280",
+  enabledForReportingButNotEnforced: "#eab308",
+};
+
+function PolicyGraphTab() {
+  const [entityFilter, setEntityFilter] = useState<Record<string, boolean>>({
+    user: true,
+    group: true,
+    application: true,
+    platform: true,
+    location: true,
+    role: true,
+  });
+  const [hoveredNode, setHoveredNode] = useState<OverlapGraphNode | null>(null);
+  const graphRef = useRef<ForceGraphMethods | undefined>();
+
+  const overlapsQ = useQuery({
+    queryKey: ["ca", "overlaps"],
+    queryFn: () => fetchCAOverlaps(),
+  });
+
+  // Filter nodes/links based on entity type toggles
+  const graphData = (() => {
+    if (!overlapsQ.data) return { nodes: [], links: [] };
+    const { nodes, links } = overlapsQ.data;
+
+    const visibleNodes = nodes.filter((n) => {
+      if (n.type === "policy") return true;
+      return n.entity_type ? entityFilter[n.entity_type] : true;
+    });
+    const visibleIds = new Set(visibleNodes.map((n) => n.id));
+    const visibleLinks = links.filter(
+      (l) => visibleIds.has(l.source) && visibleIds.has(l.target)
+    );
+
+    return { nodes: visibleNodes, links: visibleLinks };
+  })();
+
+  const nodeCanvasObject = useCallback(
+    (node: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const n = node as OverlapGraphNode & { x: number; y: number };
+      const fontSize = 12 / globalScale;
+      ctx.font = `${fontSize}px Sans-Serif`;
+
+      if (n.type === "policy") {
+        // Draw rectangle for policy
+        const label = n.label || "";
+        const textWidth = ctx.measureText(label).width;
+        const w = textWidth + 8 / globalScale;
+        const h = fontSize * 1.8;
+        ctx.fillStyle = STATE_COLORS[n.state || "disabled"] || "#6b7280";
+        ctx.fillRect(n.x - w / 2, n.y - h / 2, w, h);
+        ctx.fillStyle = "#fff";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "middle";
+        ctx.fillText(label, n.x, n.y);
+      } else {
+        // Draw circle for entity
+        const radius = n.is_overlap ? 6 / globalScale : 4 / globalScale;
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, radius, 0, 2 * Math.PI);
+        ctx.fillStyle = ENTITY_COLORS[n.entity_type || "user"] || "#6b7280";
+        ctx.fill();
+
+        if (n.is_overlap) {
+          ctx.strokeStyle = "#fff";
+          ctx.lineWidth = 1.5 / globalScale;
+          ctx.stroke();
+        }
+
+        // Label
+        ctx.fillStyle = "#d1d5db";
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(n.label || "", n.x, n.y + radius + 2 / globalScale);
+      }
+    },
+    []
+  );
+
+  const linkCanvasObject = useCallback(
+    (link: any, ctx: CanvasRenderingContext2D, globalScale: number) => {
+      const l = link as OverlapGraphLink & {
+        source: { x: number; y: number };
+        target: { x: number; y: number };
+      };
+      if (!l.source?.x || !l.target?.x) return;
+
+      ctx.beginPath();
+      ctx.moveTo(l.source.x, l.source.y);
+
+      if (l.inclusion_type === "exclude") {
+        // Dashed line for exclusions
+        ctx.setLineDash([4 / globalScale, 4 / globalScale]);
+        ctx.strokeStyle = "rgba(239, 68, 68, 0.5)";
+      } else {
+        ctx.setLineDash([]);
+        ctx.strokeStyle = "rgba(148, 163, 184, 0.4)";
+      }
+
+      ctx.lineWidth = 1 / globalScale;
+      ctx.lineTo(l.target.x, l.target.y);
+      ctx.stroke();
+      ctx.setLineDash([]);
+    },
+    []
+  );
+
+  return (
+    <div>
+      {/* Filter toggles */}
+      <div className="filter-row" style={{ marginBottom: 12 }}>
+        <span style={{ marginRight: 8 }}>Show:</span>
+        {Object.entries(ENTITY_COLORS).map(([type, color]) => (
+          <label key={type} style={{ marginRight: 12, cursor: "pointer" }}>
+            <input
+              type="checkbox"
+              checked={entityFilter[type]}
+              onChange={() =>
+                setEntityFilter((prev) => ({ ...prev, [type]: !prev[type] }))
+              }
+            />
+            <span
+              style={{
+                display: "inline-block",
+                width: 10,
+                height: 10,
+                borderRadius: "50%",
+                backgroundColor: color,
+                marginLeft: 4,
+                marginRight: 4,
+                verticalAlign: "middle",
+              }}
+            />
+            {type}
+          </label>
+        ))}
+      </div>
+
+      {/* Overlap summary */}
+      {overlapsQ.data && Object.keys(overlapsQ.data.overlap_summary).length > 0 && (
+        <div className="kpi-strip" style={{ marginBottom: 12 }}>
+          {Object.entries(overlapsQ.data.overlap_summary).map(([type, count]) => (
+            <div key={type} className="kpi-card">
+              <div className="kpi-value">{count}</div>
+              <div className="kpi-label">{type} overlaps</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Legend */}
+      <div style={{ display: "flex", gap: 16, marginBottom: 8, flexWrap: "wrap", fontSize: 12 }}>
+        <span><span style={{ display: "inline-block", width: 14, height: 8, backgroundColor: STATE_COLORS.enabled, marginRight: 4 }} />Enabled</span>
+        <span><span style={{ display: "inline-block", width: 14, height: 8, backgroundColor: STATE_COLORS.disabled, marginRight: 4 }} />Disabled</span>
+        <span><span style={{ display: "inline-block", width: 14, height: 8, backgroundColor: STATE_COLORS.enabledForReportingButNotEnforced, marginRight: 4 }} />Report-only</span>
+        <span style={{ marginLeft: 8 }}>|</span>
+        <span>Solid line = include</span>
+        <span>Dashed line = exclude</span>
+        <span>White border = overlap</span>
+      </div>
+
+      {/* Tooltip */}
+      {hoveredNode && (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 10,
+            background: "#1e293b",
+            border: "1px solid #475569",
+            borderRadius: 6,
+            padding: "8px 12px",
+            fontSize: 13,
+            pointerEvents: "none",
+            top: 200,
+            right: 20,
+          }}
+        >
+          <strong>{hoveredNode.label}</strong>
+          <br />
+          {hoveredNode.type === "policy" && (
+            <>
+              State: {hoveredNode.state}
+              <br />
+              Controls: {hoveredNode.grant_controls?.join(", ") || "none"}
+            </>
+          )}
+          {hoveredNode.type === "entity" && (
+            <>
+              Type: {hoveredNode.entity_type}
+              <br />
+              Policies: {hoveredNode.policy_count}
+              {hoveredNode.is_overlap && <><br />Overlap detected</>}
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Graph */}
+      {overlapsQ.isLoading && <p>Loading graph data...</p>}
+      {overlapsQ.data && graphData.nodes.length === 0 && (
+        <p className="center-text">No coverage data. Sync policies first.</p>
+      )}
+      {graphData.nodes.length > 0 && (
+        <div style={{ border: "1px solid #334155", borderRadius: 8, overflow: "hidden" }}>
+          <ForceGraph2D
+            ref={graphRef as any}
+            graphData={graphData}
+            nodeId="id"
+            nodeCanvasObject={nodeCanvasObject}
+            linkCanvasObject={linkCanvasObject}
+            onNodeHover={(node) => setHoveredNode(node as OverlapGraphNode | null)}
+            width={900}
+            height={500}
+            backgroundColor="#0f172a"
+            cooldownTicks={100}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* ================================================================ */
+/*  Object Lookup Tab                                               */
+/* ================================================================ */
+
+function ObjectLookupTab() {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [entityType, setEntityType] = useState("");
+  const [submitted, setSubmitted] = useState<{ query: string; type: string } | null>(null);
+
+  const lookupQ = useQuery({
+    queryKey: ["ca", "lookup", submitted?.query, submitted?.type],
+    queryFn: () => fetchCALookup(submitted!.query, submitted!.type || undefined),
+    enabled: !!submitted,
+  });
+
+  const resolveMut = useMutation({
+    mutationFn: () => resolveCALookup(submitted!.query, submitted!.type || undefined),
+  });
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!searchQuery.trim()) return;
+    resolveMut.reset();
+    setSubmitted({ query: searchQuery.trim(), type: entityType });
+  };
+
+  const results = resolveMut.data?.policies ?? lookupQ.data?.policies ?? [];
+  const resolved = resolveMut.data?.resolved;
+
+  return (
+    <div>
+      <form onSubmit={handleSubmit} className="filter-row" style={{ marginBottom: 16, gap: 8 }}>
+        <input
+          type="text"
+          placeholder="User UPN, group name, app ID..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          style={{ padding: "6px 12px", borderRadius: 4, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0", minWidth: 280 }}
+        />
+        <select
+          value={entityType}
+          onChange={(e) => setEntityType(e.target.value)}
+          style={{ padding: "6px 12px", borderRadius: 4, border: "1px solid #475569", background: "#1e293b", color: "#e2e8f0" }}
+        >
+          <option value="">All Types</option>
+          <option value="user">User</option>
+          <option value="group">Group</option>
+          <option value="application">Application</option>
+          <option value="platform">Device / Platform</option>
+        </select>
+        <button type="submit" className="btn btn-primary">
+          Search
+        </button>
+      </form>
+
+      {lookupQ.isLoading && <p>Searching cache...</p>}
+
+      {/* Resolved entity info */}
+      {resolved && (
+        <div className="kpi-card" style={{ marginBottom: 16, padding: 12 }}>
+          <strong>Resolved from Graph API:</strong> {resolved.display_name} ({resolved.type})
+          {resolved.upn && <span> &mdash; {resolved.upn}</span>}
+          {resolved.group_ids.length > 0 && (
+            <div style={{ fontSize: 12, marginTop: 4 }}>
+              Member of {resolved.group_ids.length} group(s)/role(s)
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Show "Resolve from Graph" button if cache search returned no/few results */}
+      {submitted && !lookupQ.isLoading && !resolveMut.data && (
+        <div style={{ marginBottom: 16 }}>
+          {lookupQ.data && lookupQ.data.total_policies === 0 && (
+            <p>No results found in cache.</p>
+          )}
+          <button
+            className="btn btn-primary"
+            disabled={resolveMut.isPending}
+            onClick={() => resolveMut.mutate()}
+          >
+            {resolveMut.isPending ? "Resolving..." : "Resolve from Graph API"}
+          </button>
+          {resolveMut.isError && (
+            <span className="badge badge-danger" style={{ marginLeft: 8 }}>
+              {(resolveMut.error as Error).message}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Results table */}
+      {results.length > 0 && (
+        <>
+          <h3>{results.length} Applicable Policies</h3>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Policy</th>
+                <th>State</th>
+                <th>Match Type</th>
+                <th>Grant Controls</th>
+                <th>Matched Via</th>
+              </tr>
+            </thead>
+            <tbody>
+              {results.map((r: LookupPolicyResult) => {
+                const grant = r.policy.grant_controls || {};
+                const builtIn = (grant.builtInControls as string[]) || [];
+                return (
+                  <tr key={r.policy.id}>
+                    <td>{r.policy.display_name}</td>
+                    <td>{stateBadge(r.policy.state)}</td>
+                    <td>
+                      {r.matches.map((m, i) => (
+                        <span key={i} style={{ marginRight: 4 }}>
+                          {inclusionBadge(m.inclusion_type)}
+                          {m.is_wildcard && (
+                            <span className="badge badge-warning" style={{ marginLeft: 2 }}>wildcard</span>
+                          )}
+                        </span>
+                      ))}
+                    </td>
+                    <td>{builtIn.join(", ") || "—"}</td>
+                    <td>
+                      {r.matches.map((m, i) => (
+                        <div key={i} style={{ fontSize: 12 }}>
+                          {m.entity_type}: {m.entity_display_name || m.entity_id}
+                        </div>
+                      ))}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
+
+      {submitted && results.length === 0 && !lookupQ.isLoading && !resolveMut.isPending && resolveMut.data && (
+        <p>No applicable policies found for this object.</p>
       )}
     </div>
   );

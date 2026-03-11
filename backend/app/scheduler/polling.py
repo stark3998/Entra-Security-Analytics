@@ -131,6 +131,10 @@ async def run_collection_cycle() -> None:
                 all_incidents.extend(incidents)
 
                 _update_last_collected(db, collector.collector_name)
+
+                # Commit after each collector so records are immediately visible
+                db.commit()
+
                 logger.info(
                     "Collector '%s': %d records, %d incidents",
                     collector.collector_name,
@@ -139,29 +143,35 @@ async def run_collection_cycle() -> None:
                 )
             except Exception:
                 logger.exception("Collector '%s' failed", collector.collector_name)
+                db.rollback()
 
         # ── Meta-rules ────────────────────────────────────────────────
         try:
             engine = CorrelationRulesEngine(db)
             meta_incidents = engine.evaluate_meta_rules()
             all_incidents.extend(meta_incidents)
+            db.commit()
             logger.info("Meta-rules produced %d incidents", len(meta_incidents))
         except Exception:
             logger.exception("Meta-rule evaluation failed")
+            db.rollback()
 
         # ── Anomaly detection ─────────────────────────────────────────
         try:
             detector = AnomalyDetector(db)
             anomaly_incidents = detector.detect_all()
             all_incidents.extend(anomaly_incidents)
+            db.commit()
             logger.info("Anomaly detection produced %d incidents", len(anomaly_incidents))
         except Exception:
             logger.exception("Anomaly detection failed")
+            db.rollback()
 
         # ── User sign-in profiles ─────────────────────────────────────
         try:
             from app.analyzers.user_profiles import refresh_all_profiles
             profile_result = refresh_all_profiles(db)
+            db.commit()
             logger.info(
                 "User profiles: %d updated, %d risky",
                 profile_result["updated"],
@@ -169,25 +179,29 @@ async def run_collection_cycle() -> None:
             )
         except Exception:
             logger.exception("User profile refresh failed")
+            db.rollback()
 
         # ── Expire watch windows ──────────────────────────────────────
         try:
             engine = CorrelationRulesEngine(db)
             expired = engine.expire_watch_windows()
+            db.commit()
             logger.info("Expired %d watch windows", expired)
         except Exception:
             logger.exception("Watch window expiration failed")
+            db.rollback()
 
         # ── Alert ─────────────────────────────────────────────────────
         if all_incidents:
             try:
                 dispatcher = AlertDispatcher(db)
                 sent = await dispatcher.dispatch(all_incidents)
+                db.commit()
                 logger.info("Dispatched %d alert deliveries for %d incidents", sent, len(all_incidents))
             except Exception:
                 logger.exception("Alert dispatch failed")
+                db.rollback()
 
-        db.commit()
         logger.info("=== Collection cycle complete: %d total incidents ===", len(all_incidents))
 
     except Exception:

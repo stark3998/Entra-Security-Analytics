@@ -304,6 +304,209 @@ class TestSyncEndpoint:
                 assert body["synced"]["policies"] == 5
 
 
+class TestOverlaps:
+    """GET /api/ca-policies/overlaps"""
+
+    def test_empty(self, client):
+        resp = client.get("/api/ca-policies/overlaps")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["nodes"] == []
+        assert body["links"] == []
+        assert body["overlap_summary"] == {}
+
+    def test_returns_graph_data(self, client, db):
+        p1 = make_ca_policy(id="p1", display_name="Policy A")
+        p2 = make_ca_policy(id="p2", display_name="Policy B")
+        db.add_all([p1, p2])
+        db.flush()
+        # Both policies target "All" users — overlap
+        db.add(make_coverage_entry(policy=p1, entity_type="user", entity_id="All"))
+        db.add(make_coverage_entry(policy=p2, entity_type="user", entity_id="All"))
+        # Only p1 targets app-1
+        db.add(make_coverage_entry(policy=p1, entity_type="application", entity_id="app-1"))
+        db.commit()
+
+        resp = client.get("/api/ca-policies/overlaps")
+        body = resp.json()
+        # 2 policy nodes + 2 entity nodes
+        assert len(body["nodes"]) == 4
+        assert len(body["links"]) == 3
+        # user:All should be an overlap
+        user_node = next(n for n in body["nodes"] if n["id"] == "entity:user:All")
+        assert user_node["is_overlap"] is True
+        assert user_node["policy_count"] == 2
+        # app node should not be an overlap
+        app_node = next(n for n in body["nodes"] if n["id"] == "entity:application:app-1")
+        assert app_node["is_overlap"] is False
+        assert body["overlap_summary"] == {"user": 1}
+
+    def test_filter_by_entity_type(self, client, db):
+        p1 = make_ca_policy(id="p1")
+        db.add(p1)
+        db.flush()
+        db.add(make_coverage_entry(policy=p1, entity_type="user", entity_id="All"))
+        db.add(make_coverage_entry(policy=p1, entity_type="application", entity_id="app-1"))
+        db.commit()
+
+        resp = client.get("/api/ca-policies/overlaps?entity_type=user")
+        body = resp.json()
+        entity_nodes = [n for n in body["nodes"] if n["type"] == "entity"]
+        assert len(entity_nodes) == 1
+        assert entity_nodes[0]["entity_type"] == "user"
+
+
+class TestLookup:
+    """GET /api/ca-policies/lookup"""
+
+    def test_no_results(self, client):
+        resp = client.get("/api/ca-policies/lookup?query=nonexistent")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["total_policies"] == 0
+
+    def test_finds_by_entity_id(self, client, db):
+        p1 = make_ca_policy(id="p1", display_name="MFA Policy")
+        db.add(p1)
+        db.flush()
+        db.add(make_coverage_entry(policy=p1, entity_type="user", entity_id="user-123"))
+        db.commit()
+
+        resp = client.get("/api/ca-policies/lookup?query=user-123")
+        body = resp.json()
+        assert body["total_policies"] >= 1
+        policy_ids = [r["policy"]["id"] for r in body["policies"]]
+        assert "p1" in policy_ids
+
+    def test_includes_wildcard_policies(self, client, db):
+        p1 = make_ca_policy(id="p1", display_name="All Users MFA")
+        db.add(p1)
+        db.flush()
+        db.add(make_coverage_entry(policy=p1, entity_type="user", entity_id="All"))
+        db.commit()
+
+        resp = client.get("/api/ca-policies/lookup?query=some-specific-user")
+        body = resp.json()
+        # Should still find p1 because it targets "All"
+        assert body["total_policies"] >= 1
+        assert any(
+            any(m["is_wildcard"] for m in r["matches"])
+            for r in body["policies"]
+        )
+
+    def test_finds_by_display_name(self, client, db):
+        p1 = make_ca_policy(id="p1")
+        db.add(p1)
+        db.flush()
+        db.add(
+            make_coverage_entry(
+                policy=p1,
+                entity_type="group",
+                entity_id="g-1",
+                entity_display_name="Finance Team",
+            )
+        )
+        db.commit()
+
+        resp = client.get("/api/ca-policies/lookup?query=Finance")
+        body = resp.json()
+        assert body["total_policies"] >= 1
+
+    def test_filter_by_entity_type(self, client, db):
+        p1 = make_ca_policy(id="p1")
+        db.add(p1)
+        db.flush()
+        db.add(make_coverage_entry(policy=p1, entity_type="user", entity_id="user-1"))
+        db.add(make_coverage_entry(policy=p1, entity_type="application", entity_id="app-1"))
+        db.commit()
+
+        resp = client.get("/api/ca-policies/lookup?query=app-1&entity_type=application")
+        body = resp.json()
+        assert body["total_policies"] >= 1
+        # All direct matches should be application type
+        for r in body["policies"]:
+            direct = [m for m in r["matches"] if not m["is_wildcard"]]
+            for m in direct:
+                assert m["entity_type"] == "application"
+
+
+class TestResolveLookup:
+    """POST /api/ca-policies/lookup/resolve"""
+
+    def test_not_configured(self, client):
+        """Returns 503 when MSAL not configured."""
+        with patch("app.api.routes_capolicies.get_auth_client") as mock_auth:
+            mock_client = MagicMock()
+            mock_client.is_configured = False
+            mock_auth.return_value = mock_client
+
+            resp = client.post("/api/ca-policies/lookup/resolve?query=test")
+            assert resp.status_code == 503
+
+    def test_resolve_user(self, client, db):
+        """Resolves a user and finds applicable policies."""
+        p1 = make_ca_policy(id="p1")
+        db.add(p1)
+        db.flush()
+        db.add(make_coverage_entry(policy=p1, entity_type="user", entity_id="All"))
+        db.add(
+            make_coverage_entry(
+                policy=p1, entity_type="group", entity_id="group-abc"
+            )
+        )
+        db.commit()
+
+        with patch("app.api.routes_capolicies.get_auth_client") as mock_auth:
+            mock_client = MagicMock()
+            mock_client.is_configured = True
+            mock_client.get_graph_token.return_value = "fake-token"
+            mock_auth.return_value = mock_client
+
+            with patch("app.api.routes_capolicies.CAPolicyCollector") as mock_coll_cls:
+                mock_collector = AsyncMock()
+                mock_collector.search_user.return_value = {
+                    "id": "user-xyz",
+                    "displayName": "Jane Doe",
+                    "userPrincipalName": "jane@example.com",
+                }
+                mock_collector.get_user_group_ids.return_value = ["group-abc"]
+                mock_collector.close = AsyncMock()
+                mock_coll_cls.return_value = mock_collector
+
+                resp = client.post(
+                    "/api/ca-policies/lookup/resolve?query=jane@example.com&entity_type=user"
+                )
+                assert resp.status_code == 200
+                body = resp.json()
+                assert body["resolved"] is not None
+                assert body["resolved"]["display_name"] == "Jane Doe"
+                assert body["total_policies"] >= 1
+
+    def test_resolve_not_found(self, client):
+        """Returns empty when object cannot be resolved."""
+        with patch("app.api.routes_capolicies.get_auth_client") as mock_auth:
+            mock_client = MagicMock()
+            mock_client.is_configured = True
+            mock_client.get_graph_token.return_value = "fake-token"
+            mock_auth.return_value = mock_client
+
+            with patch("app.api.routes_capolicies.CAPolicyCollector") as mock_coll_cls:
+                mock_collector = AsyncMock()
+                mock_collector.search_user.return_value = None
+                mock_collector.search_group.return_value = None
+                mock_collector.search_application.return_value = None
+                mock_collector.close = AsyncMock()
+                mock_coll_cls.return_value = mock_collector
+
+                resp = client.post(
+                    "/api/ca-policies/lookup/resolve?query=unknown-entity"
+                )
+                assert resp.status_code == 200
+                body = resp.json()
+                assert body["resolved"] is None
+                assert body["total_policies"] == 0
+
+
 # ════════════════════════════════════════════════════════════════
 #  Collector Unit Tests
 # ════════════════════════════════════════════════════════════════

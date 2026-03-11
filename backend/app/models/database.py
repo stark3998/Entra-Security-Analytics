@@ -466,6 +466,16 @@ def get_engine(database_url: str | None = None) -> Any:
         if url.startswith("sqlite"):
             connect_args["check_same_thread"] = False
         _engine = create_engine(url, connect_args=connect_args, echo=False)
+        # Enable WAL mode for SQLite to allow concurrent reads during writes
+        if url.startswith("sqlite"):
+            from sqlalchemy import event
+
+            @event.listens_for(_engine, "connect")
+            def _set_sqlite_pragma(dbapi_conn, connection_record):
+                cursor = dbapi_conn.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA busy_timeout=5000")
+                cursor.close()
     return _engine
 
 

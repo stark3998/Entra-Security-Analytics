@@ -73,6 +73,9 @@ class BaseCollector(abc.ABC):
 
     # ── Paginated collection with retry ────────────────────────
 
+    # Maximum time (seconds) for the entire collect() call across all pages
+    COLLECTION_TIMEOUT_SECONDS: float = 300.0  # 5 minutes
+
     async def collect(
         self,
         token: str,
@@ -80,6 +83,24 @@ class BaseCollector(abc.ABC):
         until: datetime,
     ) -> list[dict[str, Any]]:
         """Collect all pages of log data for the given time range."""
+        try:
+            return await asyncio.wait_for(
+                self._collect_all_pages(token, since, until),
+                timeout=self.COLLECTION_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            raise CollectorError(
+                f"[{self.collector_name}] Collection timed out after "
+                f"{self.COLLECTION_TIMEOUT_SECONDS}s"
+            )
+
+    async def _collect_all_pages(
+        self,
+        token: str,
+        since: datetime,
+        until: datetime,
+    ) -> list[dict[str, Any]]:
+        """Internal: paginated collection loop."""
         all_records: list[dict[str, Any]] = []
         next_link: str | None = None
         page = 0
@@ -156,7 +177,7 @@ class BaseCollector(abc.ABC):
                     raise CollectorError(
                         f"[{self.collector_name}] HTTP {status}: {detail}"
                     ) from exc
-            except (httpx.ConnectError, httpx.ReadTimeout) as exc:
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout, httpx.PoolTimeout) as exc:
                 logger.warning(
                     "[%s] Network error: %s. Retrying in %.1fs (attempt %d/%d)",
                     self.collector_name,

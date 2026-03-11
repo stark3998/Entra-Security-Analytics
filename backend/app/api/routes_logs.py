@@ -300,3 +300,30 @@ def _activity_to_dict(r: O365ActivityLog) -> dict:
         "app_name": r.app_name,
         "environment_name": r.environment_name,
     }
+
+
+# ── Event lookup (cross-table) ──────────────────────────────────────────
+
+@router.get("/event/{event_id}")
+def lookup_event(event_id: str, db: Session = Depends(get_db)):
+    """Look up a log event by ID across all log tables.
+
+    Returns the event details and which table it was found in.
+    """
+    # Try sign-in logs
+    signin = db.query(SignInLog).filter(SignInLog.id == event_id).first()
+    if signin:
+        return {"event_type": "signin", "event": _signin_to_dict(signin)}
+
+    # Try audit logs
+    audit = db.query(AuditLog).filter(AuditLog.id == event_id).first()
+    if audit:
+        return {"event_type": "audit", "event": _audit_to_dict(audit)}
+
+    # Try O365 activity logs
+    activity = db.query(O365ActivityLog).filter(O365ActivityLog.id == event_id).first()
+    if activity:
+        return {"event_type": "activity", "event": _activity_to_dict(activity)}
+
+    from fastapi import HTTPException
+    raise HTTPException(404, f"Event '{event_id}' not found in any log table")

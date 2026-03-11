@@ -111,14 +111,28 @@ export function fetchActivityLogs(params: Record<string, string> = {}) {
   return request<PaginatedResponse<ActivityLog>>(`${BASE}/logs/activity?${qs}`);
 }
 
+/* ── Event Lookup (cross-table) ───────────────────────────── */
+export interface EventLookupResult {
+  event_type: "signin" | "audit" | "activity";
+  event: Record<string, unknown>;
+}
+
+export function fetchEvent(eventId: string) {
+  return request<EventLookupResult>(`${BASE}/logs/event/${encodeURIComponent(eventId)}`);
+}
+
 /* ── Incidents ─────────────────────────────────────────────── */
 export interface IncidentEntry {
   id: number;
   rule_slug: string;
   rule_name: string;
+  rule_description: string;
+  rule_risk_points: number;
+  rule_category: string;
   severity: string;
   user_id: string;
   user_display_name: string;
+  title: string;
   description: string;
   evidence: unknown;
   risk_score_contribution: number;
@@ -224,6 +238,18 @@ export function fetchDashboardSummary() {
   return request<DashboardSummary>(`${BASE}/dashboard/summary`);
 }
 
+export interface WindowDetail {
+  rule_id: number;
+  rule_name: string | null;
+  rule_slug: string | null;
+  rule_description: string | null;
+  risk_contribution: number;
+  window_start: string | null;
+  window_end: string;
+  trigger_event_id: string;
+  trigger_event_source: string;
+}
+
 export interface RiskScore {
   user_id: string;
   score: number;
@@ -232,7 +258,7 @@ export interface RiskScore {
   entra_risk_level: string | null;
   multiplier: number;
   active_windows: number;
-  window_details: unknown[];
+  window_details: WindowDetail[];
 }
 
 export function fetchRiskScores(threshold = 0) {
@@ -462,6 +488,91 @@ export function fetchDirectoryEntries(params: Record<string, string> = {}) {
   return request<{ total: number; items: DirectoryEntry[] }>(
     `${BASE}/ca-policies/directory-entries?${qs}`
   );
+}
+
+/* ── CA Policy Overlap Graph ──────────────────────────────── */
+
+export interface OverlapGraphNode {
+  id: string;
+  type: "policy" | "entity";
+  label: string;
+  state?: string;
+  grant_controls?: string[];
+  entity_type?: string;
+  is_overlap?: boolean;
+  policy_count?: number;
+}
+
+export interface OverlapGraphLink {
+  source: string;
+  target: string;
+  inclusion_type: string;
+}
+
+export interface OverlapResponse {
+  nodes: OverlapGraphNode[];
+  links: OverlapGraphLink[];
+  overlap_summary: Record<string, number>;
+}
+
+export function fetchCAOverlaps(params: Record<string, string> = {}) {
+  const qs = new URLSearchParams(params).toString();
+  return request<OverlapResponse>(`${BASE}/ca-policies/overlaps?${qs}`);
+}
+
+/* ── CA Policy Lookup ────────────────────────────────────── */
+
+export interface PolicyMatch {
+  entity_type: string;
+  entity_id: string;
+  entity_display_name: string;
+  inclusion_type: string;
+  is_wildcard: boolean;
+}
+
+export interface LookupPolicyResult {
+  policy: CAPolicy;
+  matches: PolicyMatch[];
+}
+
+export interface LookupResponse {
+  query: string;
+  entity_type: string | null;
+  total_policies: number;
+  policies: LookupPolicyResult[];
+}
+
+export interface ResolvedEntity {
+  type: string;
+  id: string;
+  display_name: string;
+  upn?: string;
+  app_id?: string;
+  group_ids: string[];
+}
+
+export interface ResolveLookupResponse {
+  query: string;
+  entity_type: string | null;
+  resolved: ResolvedEntity | null;
+  total_policies: number;
+  policies: LookupPolicyResult[];
+}
+
+export function fetchCALookup(query: string, entityType?: string) {
+  const params: Record<string, string> = { query };
+  if (entityType) params.entity_type = entityType;
+  const qs = new URLSearchParams(params).toString();
+  return request<LookupResponse>(`${BASE}/ca-policies/lookup?${qs}`);
+}
+
+export function resolveCALookup(query: string, entityType?: string) {
+  const params: Record<string, string> = { query };
+  if (entityType) params.entity_type = entityType;
+  const qs = new URLSearchParams(params).toString();
+  return request<ResolveLookupResponse>(`${BASE}/ca-policies/lookup/resolve?${qs}`, {
+    method: "POST",
+  });
 }
 
 export function syncCAPolicies() {

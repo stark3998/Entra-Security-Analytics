@@ -102,9 +102,14 @@ class RiskScorer:
             window_details=[
                 {
                     "rule_id": ws.rule_id,
+                    "rule_name": ws.rule.name if ws.rule else None,
+                    "rule_slug": ws.rule.slug if ws.rule else None,
+                    "rule_description": ws.rule.description if ws.rule else None,
                     "risk_contribution": ws.risk_contribution,
+                    "window_start": ws.window_start.isoformat() if ws.window_start else None,
                     "window_end": ws.window_end.isoformat(),
                     "trigger_event_id": ws.trigger_event_id,
+                    "trigger_event_source": ws.trigger_event_source,
                 }
                 for ws in windows
             ],

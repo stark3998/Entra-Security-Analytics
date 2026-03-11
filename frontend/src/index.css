@@ -921,3 +921,56 @@ tbody tr:hover {
   color: var(--text-secondary);
   margin-top: 0.2rem;
 }
+
+/* ── JSON View ─────────────────────────────────────────────── */
+.json-view {
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius);
+  padding: 0.75rem;
+  overflow-x: auto;
+}
+.json-pre {
+  margin: 0;
+  font-family: "Fira Code", "JetBrains Mono", "Cascadia Code", "Consolas", monospace;
+  font-size: 0.82rem;
+  line-height: 1.5;
+  white-space: pre;
+  color: var(--text-primary);
+}
+.json-key {
+  color: #7dd3fc;
+}
+.json-string {
+  color: #86efac;
+}
+.json-number {
+  color: #fbbf24;
+}
+.json-boolean {
+  color: #c084fc;
+}
+.json-null {
+  color: #8b90a0;
+  font-style: italic;
+}
+.json-colon {
+  color: var(--text-secondary);
+}
+.json-toggle {
+  cursor: pointer;
+  color: var(--text-secondary);
+}
+.json-toggle:hover {
+  color: var(--accent);
+}
+.json-collapsed {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-style: italic;
+  font-size: 0.78rem;
+}
+.json-collapsed:hover {
+  color: var(--accent);
+  text-decoration: underline;
+}

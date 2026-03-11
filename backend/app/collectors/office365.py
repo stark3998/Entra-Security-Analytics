@@ -8,6 +8,7 @@ The O365 Management API uses a subscription + poll model:
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Any
@@ -114,25 +115,31 @@ class Office365Collector(BaseCollector):
         # Get next page from header
         next_page = resp.headers.get("NextPageUri")
 
-        # Fetch actual audit records from each content blob
+        # Fetch actual audit records from each content blob (concurrently)
         all_records: list[dict[str, Any]] = []
-        for blob in blobs:
-            content_uri = blob.get("contentUri", "")
-            if content_uri:
-                try:
-                    blob_resp = await self._get(content_uri, token)
-                    blob_data = blob_resp.json()
-                    if isinstance(blob_data, list):
-                        all_records.extend(blob_data)
-                    else:
-                        all_records.append(blob_data)
-                except Exception:
-                    logger.warning(
-                        "[%s] Failed to fetch content blob: %s",
-                        self.collector_name,
-                        content_uri,
-                        exc_info=True,
-                    )
+        content_uris = [b.get("contentUri", "") for b in blobs if b.get("contentUri")]
+
+        if content_uris:
+            semaphore = asyncio.Semaphore(10)  # max 10 concurrent blob fetches
+
+            async def _fetch_blob(uri: str) -> list[dict[str, Any]]:
+                async with semaphore:
+                    try:
+                        blob_resp = await self._get(uri, token)
+                        blob_data = blob_resp.json()
+                        return blob_data if isinstance(blob_data, list) else [blob_data]
+                    except Exception:
+                        logger.warning(
+                            "[%s] Failed to fetch content blob: %s",
+                            self.collector_name,
+                            uri,
+                            exc_info=True,
+                        )
+                        return []
+
+            results = await asyncio.gather(*[_fetch_blob(uri) for uri in content_uris])
+            for batch in results:
+                all_records.extend(batch)
 
         return all_records, next_page
 

@@ -11,8 +11,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.auth.msal_client import get_auth_client
-from app.collectors.ca_policies import CAPolicyCollector
+from app.auth.msal_client import TokenAcquisitionError, get_auth_client
+from app.collectors.ca_policies import CAPolicyCollector, CAPolicyCollectorError
 from app.models.database import (
     AuthenticationStrength,
     ConditionalAccessPolicy,
@@ -135,6 +135,89 @@ def policy_coverage(
     }
 
 
+@router.get("/overlaps")
+def policy_overlaps(
+    db: Session = Depends(get_db),
+    entity_type: str | None = None,
+):
+    """Return a graph data structure (nodes + links) for policy overlap visualization."""
+    q = db.query(PolicyCoverageCache)
+    if entity_type:
+        q = q.filter(PolicyCoverageCache.entity_type == entity_type)
+    entries = q.all()
+
+    # Build policy nodes
+    policy_ids = {e.policy_id for e in entries}
+    policies = (
+        db.query(ConditionalAccessPolicy)
+        .filter(ConditionalAccessPolicy.id.in_(policy_ids))
+        .all()
+    ) if policy_ids else []
+    policy_map = {p.id: p for p in policies}
+
+    nodes: list[dict[str, Any]] = []
+    links: list[dict[str, Any]] = []
+
+    # Add policy nodes
+    for p in policies:
+        grant = p.grant_controls or {}
+        nodes.append({
+            "id": f"policy:{p.id}",
+            "type": "policy",
+            "label": p.display_name,
+            "state": p.state,
+            "grant_controls": grant.get("builtInControls", []),
+        })
+
+    # Group entries by entity to detect overlaps
+    entity_policies: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for e in entries:
+        key = f"{e.entity_type}:{e.entity_id}"
+        entity_policies[key].append({
+            "policy_id": e.policy_id,
+            "inclusion_type": e.inclusion_type,
+        })
+
+    # Add entity nodes and links
+    for key, pol_refs in entity_policies.items():
+        etype, eid = key.split(":", 1)
+        # Find display name from entries
+        display_name = ""
+        for e in entries:
+            if e.entity_type == etype and e.entity_id == eid and e.entity_display_name:
+                display_name = e.entity_display_name
+                break
+
+        nodes.append({
+            "id": f"entity:{key}",
+            "type": "entity",
+            "entity_type": etype,
+            "label": display_name or eid,
+            "is_overlap": len({r["policy_id"] for r in pol_refs}) > 1,
+            "policy_count": len({r["policy_id"] for r in pol_refs}),
+        })
+
+        for ref in pol_refs:
+            links.append({
+                "source": f"policy:{ref['policy_id']}",
+                "target": f"entity:{key}",
+                "inclusion_type": ref["inclusion_type"],
+            })
+
+    # Overlap summary: count of entities shared by 2+ policies, grouped by entity_type
+    overlap_summary: dict[str, int] = defaultdict(int)
+    for key, pol_refs in entity_policies.items():
+        if len({r["policy_id"] for r in pol_refs}) > 1:
+            etype = key.split(":", 1)[0]
+            overlap_summary[etype] += 1
+
+    return {
+        "nodes": nodes,
+        "links": links,
+        "overlap_summary": dict(overlap_summary),
+    }
+
+
 @router.get("/coverage/gaps")
 def coverage_gaps(db: Session = Depends(get_db)):
     """Identify potential coverage gaps — policies with broad or missing targeting."""
@@ -214,6 +297,205 @@ def coverage_summary(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/lookup")
+def lookup_policies(
+    db: Session = Depends(get_db),
+    query: str = Query(..., min_length=1),
+    entity_type: str | None = None,
+):
+    """Find all CA policies that apply to a given object (user, group, app, etc.).
+
+    Searches the coverage cache by entity_id and entity_display_name,
+    and also includes policies that target 'All' users/apps.
+    """
+    q = db.query(PolicyCoverageCache)
+    if entity_type:
+        q = q.filter(PolicyCoverageCache.entity_type == entity_type)
+
+    # Search by exact entity_id or case-insensitive display name match
+    search_pattern = f"%{query}%"
+    direct_matches = q.filter(
+        (PolicyCoverageCache.entity_id == query)
+        | (PolicyCoverageCache.entity_display_name.ilike(search_pattern))
+    ).all()
+
+    # Also find "All" wildcard policies (target all users or all apps)
+    wildcard_entries = (
+        db.query(PolicyCoverageCache)
+        .filter(PolicyCoverageCache.entity_id == "All")
+        .all()
+    )
+    # If entity_type is specified, only include relevant wildcards
+    if entity_type:
+        wildcard_entries = [
+            e for e in wildcard_entries
+            if e.entity_type in ("user", "application")
+        ]
+
+    # Combine and deduplicate by (policy_id, entity_type, entity_id)
+    seen: set[tuple[str, str, str]] = set()
+    all_entries: list[PolicyCoverageCache] = []
+    for e in direct_matches + wildcard_entries:
+        key = (e.policy_id, e.entity_type, e.entity_id)
+        if key not in seen:
+            seen.add(key)
+            all_entries.append(e)
+
+    # Group by policy and enrich with full policy data
+    policy_ids = {e.policy_id for e in all_entries}
+    policies = (
+        db.query(ConditionalAccessPolicy)
+        .filter(ConditionalAccessPolicy.id.in_(policy_ids))
+        .all()
+    ) if policy_ids else []
+    policy_map = {p.id: p for p in policies}
+
+    results: list[dict[str, Any]] = []
+    for pid in policy_ids:
+        pol = policy_map.get(pid)
+        if not pol:
+            continue
+        matching = [e for e in all_entries if e.policy_id == pid]
+        results.append({
+            "policy": _policy_to_dict(pol),
+            "matches": [
+                {
+                    "entity_type": e.entity_type,
+                    "entity_id": e.entity_id,
+                    "entity_display_name": e.entity_display_name,
+                    "inclusion_type": e.inclusion_type,
+                    "is_wildcard": e.entity_id == "All",
+                }
+                for e in matching
+            ],
+        })
+
+    return {
+        "query": query,
+        "entity_type": entity_type,
+        "total_policies": len(results),
+        "policies": results,
+    }
+
+
+@router.post("/lookup/resolve")
+async def resolve_and_lookup(
+    db: Session = Depends(get_db),
+    query: str = Query(..., min_length=1),
+    entity_type: str | None = None,
+):
+    """Resolve an object via live Graph API, then find applicable CA policies.
+
+    Resolves user/group/app by ID or name, gets group memberships for users,
+    and cross-references all resolved IDs against the coverage cache.
+    """
+    auth_client = get_auth_client()
+    if not auth_client.is_configured:
+        raise HTTPException(503, "MSAL client not configured")
+
+    try:
+        token = auth_client.get_graph_token()
+    except TokenAcquisitionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    collector = CAPolicyCollector()
+
+    resolved: dict[str, Any] | None = None
+    resolved_ids: set[str] = set()
+    resolved_type: str = ""
+
+    try:
+        if entity_type in (None, "user"):
+            resolved = await collector.search_user(token, query)
+            if resolved:
+                resolved_type = "user"
+                resolved_ids.add(resolved["id"])
+                if resolved.get("userPrincipalName"):
+                    resolved_ids.add(resolved["userPrincipalName"])
+                # Also get group memberships
+                group_ids = await collector.get_user_group_ids(token, resolved["id"])
+                resolved_ids.update(group_ids)
+
+        if not resolved and entity_type in (None, "group"):
+            resolved = await collector.search_group(token, query)
+            if resolved:
+                resolved_type = "group"
+                resolved_ids.add(resolved["id"])
+
+        if not resolved and entity_type in (None, "application"):
+            resolved = await collector.search_application(token, query)
+            if resolved:
+                resolved_type = "application"
+                resolved_ids.add(resolved["id"])
+                if resolved.get("appId"):
+                    resolved_ids.add(resolved["appId"])
+    finally:
+        await collector.close()
+
+    if not resolved:
+        return {
+            "query": query,
+            "entity_type": entity_type,
+            "resolved": None,
+            "total_policies": 0,
+            "policies": [],
+        }
+
+    # Search coverage cache for all resolved IDs + "All" wildcard
+    matching_entries = (
+        db.query(PolicyCoverageCache)
+        .filter(
+            (PolicyCoverageCache.entity_id.in_(resolved_ids))
+            | (PolicyCoverageCache.entity_id == "All")
+        )
+        .all()
+    )
+
+    # Group by policy
+    policy_ids = {e.policy_id for e in matching_entries}
+    policies = (
+        db.query(ConditionalAccessPolicy)
+        .filter(ConditionalAccessPolicy.id.in_(policy_ids))
+        .all()
+    ) if policy_ids else []
+    policy_map = {p.id: p for p in policies}
+
+    results: list[dict[str, Any]] = []
+    for pid in policy_ids:
+        pol = policy_map.get(pid)
+        if not pol:
+            continue
+        matching = [e for e in matching_entries if e.policy_id == pid]
+        results.append({
+            "policy": _policy_to_dict(pol),
+            "matches": [
+                {
+                    "entity_type": e.entity_type,
+                    "entity_id": e.entity_id,
+                    "entity_display_name": e.entity_display_name,
+                    "inclusion_type": e.inclusion_type,
+                    "is_wildcard": e.entity_id == "All",
+                }
+                for e in matching
+            ],
+        })
+
+    return {
+        "query": query,
+        "entity_type": entity_type,
+        "resolved": {
+            "type": resolved_type,
+            "id": resolved.get("id"),
+            "display_name": resolved.get("displayName", ""),
+            "upn": resolved.get("userPrincipalName"),
+            "app_id": resolved.get("appId"),
+            "group_ids": list(resolved_ids - {resolved.get("id", ""), resolved.get("userPrincipalName", ""), resolved.get("appId", "")}),
+        },
+        "total_policies": len(results),
+        "policies": results,
+    }
+
+
 @router.get("/named-locations")
 def list_named_locations(db: Session = Depends(get_db)):
     """List all cached named locations."""
@@ -260,10 +542,16 @@ async def sync_policies(db: Session = Depends(get_db)):
             detail="MSAL client not configured — set app registration credentials first",
         )
 
-    token = auth_client.get_graph_token()
+    try:
+        token = auth_client.get_graph_token()
+    except TokenAcquisitionError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
     collector = CAPolicyCollector()
     try:
         counts = await collector.sync_all(token, db)
+    except CAPolicyCollectorError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     finally:
         await collector.close()
 

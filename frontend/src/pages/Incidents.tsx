@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchIncidents, patchIncident, type IncidentEntry, type PaginatedResponse } from "../api";
+import { fetchIncidents, patchIncident, fetchEvent, type IncidentEntry, type PaginatedResponse, type EventLookupResult } from "../api";
+import JsonView from "../components/JsonView";
 
 const PAGE_SIZE = 50;
 const STATUS_OPTIONS = ["", "open", "investigating", "resolved", "closed", "false_positive"];
@@ -8,6 +9,7 @@ const STATUS_OPTIONS = ["", "open", "investigating", "resolved", "closed", "fals
 export default function Incidents() {
   const [offset, setOffset] = useState(0);
   const [statusFilter, setStatusFilter] = useState("");
+  const [expandedId, setExpandedId] = useState<number | null>(null);
   const queryClient = useQueryClient();
 
   const params: Record<string, string> = {
@@ -51,6 +53,7 @@ export default function Incidents() {
             <table>
               <thead>
                 <tr>
+                  <th></th>
                   <th>ID</th>
                   <th>Created</th>
                   <th>Severity</th>
@@ -63,26 +66,14 @@ export default function Incidents() {
               </thead>
               <tbody>
                 {items.map((inc) => (
-                  <tr key={inc.id}>
-                    <td>{inc.id}</td>
-                    <td>{fmtDate(inc.created_at)}</td>
-                    <td><span className={`badge badge-${inc.severity}`}>{inc.severity}</span></td>
-                    <td title={inc.rule_slug}>{inc.rule_name || inc.rule_slug}</td>
-                    <td>{inc.user_display_name || inc.user_id}</td>
-                    <td><span className={`badge badge-${inc.status}`}>{inc.status}</span></td>
-                    <td>{inc.mitre_tactic ? `${inc.mitre_tactic} / ${inc.mitre_technique}` : "–"}</td>
-                    <td>
-                      {inc.status === "open" && (
-                        <button
-                          className="btn btn-sm btn-primary"
-                          onClick={() => resolveMutation.mutate(inc.id)}
-                          disabled={resolveMutation.isPending}
-                        >
-                          Resolve
-                        </button>
-                      )}
-                    </td>
-                  </tr>
+                  <IncidentRow
+                    key={inc.id}
+                    inc={inc}
+                    isExpanded={expandedId === inc.id}
+                    onToggle={() => setExpandedId(expandedId === inc.id ? null : inc.id)}
+                    onResolve={() => resolveMutation.mutate(inc.id)}
+                    resolving={resolveMutation.isPending}
+                  />
                 ))}
               </tbody>
             </table>
@@ -93,6 +84,282 @@ export default function Incidents() {
       </div>
     </div>
   );
+}
+
+/* ── Incident Row (expandable) ─────────────────────────── */
+
+function IncidentRow({
+  inc,
+  isExpanded,
+  onToggle,
+  onResolve,
+  resolving,
+}: {
+  inc: IncidentEntry;
+  isExpanded: boolean;
+  onToggle: () => void;
+  onResolve: () => void;
+  resolving: boolean;
+}) {
+  return (
+    <>
+      <tr className="clickable-row" onClick={onToggle}>
+        <td className="expand-arrow">{isExpanded ? "▼" : "▶"}</td>
+        <td>{inc.id}</td>
+        <td>{fmtDate(inc.created_at)}</td>
+        <td><span className={`badge badge-${inc.severity}`}>{inc.severity}</span></td>
+        <td title={inc.rule_slug}>{inc.rule_name || inc.rule_slug}</td>
+        <td>{inc.user_display_name || inc.user_id}</td>
+        <td><span className={`badge badge-${inc.status}`}>{inc.status}</span></td>
+        <td>{inc.mitre_tactic ? `${inc.mitre_tactic} / ${inc.mitre_technique}` : "–"}</td>
+        <td>
+          {inc.status === "open" && (
+            <button
+              className="btn btn-sm btn-primary"
+              onClick={(e) => { e.stopPropagation(); onResolve(); }}
+              disabled={resolving}
+            >
+              Resolve
+            </button>
+          )}
+        </td>
+      </tr>
+      {isExpanded && (
+        <tr className="expanded-row">
+          <td colSpan={9}>
+            <IncidentDetails inc={inc} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/* ── Expanded details panel ────────────────────────────── */
+
+function IncidentDetails({ inc }: { inc: IncidentEntry }) {
+  const evidence = inc.evidence as string[] | null;
+  const [expandedEvent, setExpandedEvent] = useState<string | null>(null);
+
+  return (
+    <div className="user-detail-panel">
+      {/* Title & Description */}
+      {inc.title && (
+        <h4 style={{ margin: "0 0 0.5rem" }}>{inc.title}</h4>
+      )}
+      {inc.description && (
+        <div className="risk-alert" style={{ marginBottom: "1rem" }}>
+          <strong>Description:</strong>
+          <p style={{ margin: "0.25rem 0 0" }}>{inc.description}</p>
+        </div>
+      )}
+
+      <div className="detail-grid">
+        {/* Score Reasoning */}
+        <div className="detail-section">
+          <h4>Score & Reasoning</h4>
+          <table className="nested-table">
+            <tbody>
+              <tr>
+                <td><strong>Risk Score at Creation</strong></td>
+                <td>
+                  <span className={`badge badge-${inc.severity}`}>
+                    {inc.risk_score_contribution} pts
+                  </span>
+                </td>
+              </tr>
+              {inc.rule_risk_points != null && (
+                <tr>
+                  <td><strong>Rule Risk Points</strong></td>
+                  <td>{inc.rule_risk_points} pts</td>
+                </tr>
+              )}
+              {inc.rule_category && (
+                <tr>
+                  <td><strong>Rule Category</strong></td>
+                  <td>{inc.rule_category}</td>
+                </tr>
+              )}
+              {inc.rule_description && (
+                <tr>
+                  <td><strong>Rule Description</strong></td>
+                  <td>{inc.rule_description}</td>
+                </tr>
+              )}
+              {inc.rule_name && (
+                <tr>
+                  <td><strong>Rule</strong></td>
+                  <td>
+                    <a href="/rules" style={{ color: "var(--accent)", textDecoration: "none" }}>
+                      {inc.rule_name}
+                    </a>
+                    {inc.rule_slug && (
+                      <span style={{ color: "var(--text-secondary)", marginLeft: "0.5rem", fontFamily: "monospace", fontSize: "0.85rem" }}>
+                        ({inc.rule_slug})
+                      </span>
+                    )}
+                  </td>
+                </tr>
+              )}
+              {inc.mitre_tactic && (
+                <tr>
+                  <td><strong>MITRE ATT&CK</strong></td>
+                  <td>{inc.mitre_tactic}{inc.mitre_technique ? ` / ${inc.mitre_technique}` : ""}</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Evidence — expandable event details */}
+        <div className="detail-section">
+          <h4>Evidence (Correlated Events)</h4>
+          {evidence && evidence.length > 0 ? (
+            <table className="nested-table">
+              <thead>
+                <tr>
+                  <th></th>
+                  <th>Event ID</th>
+                </tr>
+              </thead>
+              <tbody>
+                {evidence.map((eid, i) => (
+                  <EvidenceEventRow
+                    key={i}
+                    eventId={eid}
+                    isExpanded={expandedEvent === eid}
+                    onToggle={() => setExpandedEvent(expandedEvent === eid ? null : eid)}
+                  />
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <p style={{ color: "var(--text-secondary)" }}>No correlated events recorded.</p>
+          )}
+        </div>
+
+        {/* Metadata */}
+        <div className="detail-section">
+          <h4>Metadata</h4>
+          <table className="nested-table">
+            <tbody>
+              <tr><td><strong>Assigned To</strong></td><td>{inc.assigned_to || "–"}</td></tr>
+              <tr><td><strong>Created</strong></td><td>{fmtDate(inc.created_at)}</td></tr>
+              <tr><td><strong>Updated</strong></td><td>{fmtDate(inc.updated_at)}</td></tr>
+              <tr><td><strong>Status</strong></td><td><span className={`badge badge-${inc.status}`}>{inc.status}</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* Notes */}
+        {inc.notes && (
+          <div className="detail-section">
+            <h4>Notes</h4>
+            <p style={{ whiteSpace: "pre-wrap", margin: 0 }}>{inc.notes}</p>
+          </div>
+        )}
+
+        {/* Raw Incident JSON */}
+        <div className="detail-section" style={{ gridColumn: "1 / -1" }}>
+          <h4>Raw Incident JSON</h4>
+          <JsonView data={inc} initialExpanded={false} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Evidence Event Row (expandable) ──────────────────── */
+
+function EvidenceEventRow({
+  eventId,
+  isExpanded,
+  onToggle,
+}: {
+  eventId: string;
+  isExpanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <>
+      <tr className="clickable-row" onClick={onToggle}>
+        <td className="expand-arrow">{isExpanded ? "▼" : "▶"}</td>
+        <td style={{ fontFamily: "monospace", fontSize: "0.85rem" }}>{eventId}</td>
+      </tr>
+      {isExpanded && (
+        <tr className="expanded-row">
+          <td colSpan={2}>
+            <EventDetailPanel eventId={eventId} />
+          </td>
+        </tr>
+      )}
+    </>
+  );
+}
+
+/* ── Inline event detail panel (fetches on expand) ─────── */
+
+function EventDetailPanel({ eventId }: { eventId: string }) {
+  const [viewMode, setViewMode] = useState<"table" | "raw">("table");
+  const { data, isLoading, error } = useQuery<EventLookupResult>({
+    queryKey: ["event-lookup", eventId],
+    queryFn: () => fetchEvent(eventId),
+  });
+
+  if (isLoading) return <p className="loading" style={{ padding: "0.5rem" }}>Loading event…</p>;
+  if (error) return <p style={{ color: "var(--danger)", padding: "0.5rem" }}>Event not found or error loading.</p>;
+  if (!data) return null;
+
+  const evt = data.event;
+  const typeLabel = data.event_type === "signin" ? "Sign-In Log"
+    : data.event_type === "audit" ? "Audit Log"
+    : "Activity Log";
+
+  const scalarEntries = Object.entries(evt).filter(
+    ([, v]) => v != null && v !== "" && typeof v !== "object"
+  );
+  const objectEntries = Object.entries(evt).filter(
+    ([, v]) => v != null && typeof v === "object"
+  );
+
+  return (
+    <div style={{ padding: "0.5rem 0" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "0.5rem" }}>
+        <strong style={{ fontSize: "0.9rem" }}>
+          {typeLabel}
+          <span className="badge badge-info" style={{ marginLeft: "0.5rem" }}>{data.event_type}</span>
+        </strong>
+        <div style={{ display: "flex", gap: "0.25rem" }}>
+          <button className={`btn btn-sm ${viewMode === "table" ? "btn-primary" : ""}`} onClick={() => setViewMode("table")}>Table</button>
+          <button className={`btn btn-sm ${viewMode === "raw" ? "btn-primary" : ""}`} onClick={() => setViewMode("raw")}>Raw JSON</button>
+        </div>
+      </div>
+      {viewMode === "table" ? (
+        <table className="nested-table">
+          <tbody>
+            {scalarEntries.map(([key, value]) => (
+              <tr key={key}>
+                <td style={{ fontWeight: 600, whiteSpace: "nowrap", width: "1%" }}>{formatKey(key)}</td>
+                <td style={{ wordBreak: "break-all" }}>{String(value)}</td>
+              </tr>
+            ))}
+            {objectEntries.map(([key, value]) => (
+              <tr key={key}>
+                <td style={{ fontWeight: 600, whiteSpace: "nowrap", width: "1%", verticalAlign: "top" }}>{formatKey(key)}</td>
+                <td><JsonView data={value} initialExpanded={false} /></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      ) : (
+        <JsonView data={evt} initialExpanded={true} />
+      )}
+    </div>
+  );
+}
+
+function formatKey(key: string): string {
+  return key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 function Pagination({

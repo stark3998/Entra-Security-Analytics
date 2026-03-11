@@ -296,6 +296,109 @@ class CAPolicyCollector:
             for eid in ids
         ]
 
+    # ── Search / resolve helpers for live lookup ────────────────
+
+    async def search_user(self, token: str, query: str) -> dict[str, Any] | None:
+        """Search for a user by ID, UPN, or displayName."""
+        # Try direct lookup first (works for ID and UPN)
+        try:
+            resp = await self._get(
+                f"https://graph.microsoft.com/v1.0/users/{query}",
+                token,
+                params={"$select": "id,displayName,userPrincipalName"},
+            )
+            return resp.json()
+        except Exception:
+            pass
+        # Fall back to search by displayName
+        try:
+            data = await self._get_with_retry(
+                "https://graph.microsoft.com/v1.0/users",
+                token,
+                params={
+                    "$filter": f"startswith(displayName,'{query}') or startswith(userPrincipalName,'{query}')",
+                    "$select": "id,displayName,userPrincipalName",
+                    "$top": "5",
+                },
+            )
+            items = data.get("value", [])
+            return items[0] if items else None
+        except Exception:
+            return None
+
+    async def search_group(self, token: str, query: str) -> dict[str, Any] | None:
+        """Search for a group by ID or displayName."""
+        try:
+            resp = await self._get(
+                f"{GROUPS_URL}/{query}",
+                token,
+                params={"$select": "id,displayName"},
+            )
+            return resp.json()
+        except Exception:
+            pass
+        try:
+            data = await self._get_with_retry(
+                GROUPS_URL,
+                token,
+                params={
+                    "$filter": f"startswith(displayName,'{query}')",
+                    "$select": "id,displayName",
+                    "$top": "5",
+                },
+            )
+            items = data.get("value", [])
+            return items[0] if items else None
+        except Exception:
+            return None
+
+    async def search_application(self, token: str, query: str) -> dict[str, Any] | None:
+        """Search for a service principal / application by ID, appId, or displayName."""
+        sp_url = "https://graph.microsoft.com/v1.0/servicePrincipals"
+        # Try by appId
+        try:
+            data = await self._get_with_retry(
+                sp_url,
+                token,
+                params={
+                    "$filter": f"appId eq '{query}'",
+                    "$select": "id,appId,displayName",
+                    "$top": "1",
+                },
+            )
+            items = data.get("value", [])
+            if items:
+                return items[0]
+        except Exception:
+            pass
+        # Try by displayName
+        try:
+            data = await self._get_with_retry(
+                sp_url,
+                token,
+                params={
+                    "$filter": f"startswith(displayName,'{query}')",
+                    "$select": "id,appId,displayName",
+                    "$top": "5",
+                },
+            )
+            items = data.get("value", [])
+            return items[0] if items else None
+        except Exception:
+            return None
+
+    async def get_user_group_ids(self, token: str, user_id: str) -> list[str]:
+        """Get group and directory role IDs a user is a member of."""
+        try:
+            data = await self._get_all_pages(
+                f"https://graph.microsoft.com/v1.0/users/{user_id}/memberOf",
+                token,
+                params={"$select": "id"},
+            )
+            return [m["id"] for m in data if "id" in m]
+        except Exception:
+            return []
+
     # ── Full sync orchestrator ────────────────────────────────
 
     async def sync_all(self, token: str, db: Any) -> dict[str, int]:

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchIncidents, patchIncident, fetchEvent, type IncidentEntry, type PaginatedResponse, type EventLookupResult } from "../api";
 import JsonView from "../components/JsonView";
+import SortableTable, { type ColumnDef } from "../components/SortableTable";
 
 const PAGE_SIZE = 50;
 const STATUS_OPTIONS = ["", "open", "investigating", "resolved", "closed", "false_positive"];
@@ -31,9 +32,78 @@ export default function Incidents() {
   const total = data?.total ?? 0;
   const items = data?.items ?? [];
 
+  const columns: ColumnDef<IncidentEntry>[] = [
+    {
+      key: "id",
+      header: "ID",
+      value: (inc) => inc.id,
+    },
+    {
+      key: "created_at",
+      header: "Created",
+      value: (inc) => inc.created_at,
+      render: (inc) => fmtDate(inc.created_at),
+    },
+    {
+      key: "severity",
+      header: "Severity",
+      groupable: true,
+      value: (inc) => inc.severity,
+      render: (inc) => <span className={`badge badge-${inc.severity}`}>{inc.severity}</span>,
+    },
+    {
+      key: "rule_name",
+      header: "Rule",
+      groupable: true,
+      value: (inc) => inc.rule_name || inc.rule_slug,
+      render: (inc) => <span title={inc.rule_slug}>{inc.rule_name || inc.rule_slug}</span>,
+    },
+    {
+      key: "user",
+      header: "User",
+      groupable: true,
+      value: (inc) => inc.user_display_name || inc.user_id,
+    },
+    {
+      key: "status",
+      header: "Status",
+      groupable: true,
+      value: (inc) => inc.status,
+      render: (inc) => <span className={`badge badge-${inc.status}`}>{inc.status}</span>,
+    },
+    {
+      key: "mitre",
+      header: "MITRE",
+      groupable: true,
+      value: (inc) => inc.mitre_tactic || "",
+      render: (inc) =>
+        inc.mitre_tactic ? `${inc.mitre_tactic} / ${inc.mitre_technique}` : "–",
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      sortable: false,
+      value: () => "",
+      render: (inc) =>
+        inc.status === "open" ? (
+          <button
+            className="btn btn-sm btn-primary"
+            onClick={(e) => {
+              e.stopPropagation();
+              resolveMutation.mutate(inc.id);
+            }}
+            disabled={resolveMutation.isPending}
+          >
+            Resolve
+          </button>
+        ) : null,
+    },
+  ];
+
   return (
     <div>
-      <h1 className="page-heading">Incidents</h1>
+      <h1 className="page-heading">Security Incidents</h1>
+      <p className="page-subtitle">Correlated alerts triggered by detection rules — triage, investigate, and resolve threats</p>
 
       <div className="filters">
         <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setOffset(0); }}>
@@ -49,89 +119,20 @@ export default function Incidents() {
         {isLoading ? (
           <p className="loading">Loading…</p>
         ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th></th>
-                  <th>ID</th>
-                  <th>Created</th>
-                  <th>Severity</th>
-                  <th>Rule</th>
-                  <th>User</th>
-                  <th>Status</th>
-                  <th>MITRE</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((inc) => (
-                  <IncidentRow
-                    key={inc.id}
-                    inc={inc}
-                    isExpanded={expandedId === inc.id}
-                    onToggle={() => setExpandedId(expandedId === inc.id ? null : inc.id)}
-                    onResolve={() => resolveMutation.mutate(inc.id)}
-                    resolving={resolveMutation.isPending}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SortableTable
+            columns={columns}
+            data={items}
+            rowKey={(inc) => inc.id}
+            expandedKey={expandedId}
+            onToggleExpand={(key) => setExpandedId(expandedId === key ? null : (key as number))}
+            renderExpanded={(inc) => <IncidentDetails inc={inc} />}
+            defaultSort={{ key: "created_at", dir: "desc" }}
+          />
         )}
 
         <Pagination offset={offset} total={total} pageSize={PAGE_SIZE} onChange={setOffset} />
       </div>
     </div>
-  );
-}
-
-/* ── Incident Row (expandable) ─────────────────────────── */
-
-function IncidentRow({
-  inc,
-  isExpanded,
-  onToggle,
-  onResolve,
-  resolving,
-}: {
-  inc: IncidentEntry;
-  isExpanded: boolean;
-  onToggle: () => void;
-  onResolve: () => void;
-  resolving: boolean;
-}) {
-  return (
-    <>
-      <tr className="clickable-row" onClick={onToggle}>
-        <td className="expand-arrow">{isExpanded ? "▼" : "▶"}</td>
-        <td>{inc.id}</td>
-        <td>{fmtDate(inc.created_at)}</td>
-        <td><span className={`badge badge-${inc.severity}`}>{inc.severity}</span></td>
-        <td title={inc.rule_slug}>{inc.rule_name || inc.rule_slug}</td>
-        <td>{inc.user_display_name || inc.user_id}</td>
-        <td><span className={`badge badge-${inc.status}`}>{inc.status}</span></td>
-        <td>{inc.mitre_tactic ? `${inc.mitre_tactic} / ${inc.mitre_technique}` : "–"}</td>
-        <td>
-          {inc.status === "open" && (
-            <button
-              className="btn btn-sm btn-primary"
-              onClick={(e) => { e.stopPropagation(); onResolve(); }}
-              disabled={resolving}
-            >
-              Resolve
-            </button>
-          )}
-        </td>
-      </tr>
-      {isExpanded && (
-        <tr className="expanded-row">
-          <td colSpan={9}>
-            <IncidentDetails inc={inc} />
-          </td>
-        </tr>
-      )}
-    </>
   );
 }
 
@@ -143,7 +144,6 @@ function IncidentDetails({ inc }: { inc: IncidentEntry }) {
 
   return (
     <div className="user-detail-panel">
-      {/* Title & Description */}
       {inc.title && (
         <h4 style={{ margin: "0 0 0.5rem" }}>{inc.title}</h4>
       )}
@@ -155,7 +155,6 @@ function IncidentDetails({ inc }: { inc: IncidentEntry }) {
       )}
 
       <div className="detail-grid">
-        {/* Score Reasoning */}
         <div className="detail-section">
           <h4>Score & Reasoning</h4>
           <table className="nested-table">
@@ -169,22 +168,13 @@ function IncidentDetails({ inc }: { inc: IncidentEntry }) {
                 </td>
               </tr>
               {inc.rule_risk_points != null && (
-                <tr>
-                  <td><strong>Rule Risk Points</strong></td>
-                  <td>{inc.rule_risk_points} pts</td>
-                </tr>
+                <tr><td><strong>Rule Risk Points</strong></td><td>{inc.rule_risk_points} pts</td></tr>
               )}
               {inc.rule_category && (
-                <tr>
-                  <td><strong>Rule Category</strong></td>
-                  <td>{inc.rule_category}</td>
-                </tr>
+                <tr><td><strong>Rule Category</strong></td><td>{inc.rule_category}</td></tr>
               )}
               {inc.rule_description && (
-                <tr>
-                  <td><strong>Rule Description</strong></td>
-                  <td>{inc.rule_description}</td>
-                </tr>
+                <tr><td><strong>Rule Description</strong></td><td>{inc.rule_description}</td></tr>
               )}
               {inc.rule_name && (
                 <tr>
@@ -202,25 +192,18 @@ function IncidentDetails({ inc }: { inc: IncidentEntry }) {
                 </tr>
               )}
               {inc.mitre_tactic && (
-                <tr>
-                  <td><strong>MITRE ATT&CK</strong></td>
-                  <td>{inc.mitre_tactic}{inc.mitre_technique ? ` / ${inc.mitre_technique}` : ""}</td>
-                </tr>
+                <tr><td><strong>MITRE ATT&CK</strong></td><td>{inc.mitre_tactic}{inc.mitre_technique ? ` / ${inc.mitre_technique}` : ""}</td></tr>
               )}
             </tbody>
           </table>
         </div>
 
-        {/* Evidence — expandable event details */}
         <div className="detail-section">
           <h4>Evidence (Correlated Events)</h4>
           {evidence && evidence.length > 0 ? (
             <table className="nested-table">
               <thead>
-                <tr>
-                  <th></th>
-                  <th>Event ID</th>
-                </tr>
+                <tr><th></th><th>Event ID</th></tr>
               </thead>
               <tbody>
                 {evidence.map((eid, i) => (
@@ -238,7 +221,6 @@ function IncidentDetails({ inc }: { inc: IncidentEntry }) {
           )}
         </div>
 
-        {/* Metadata */}
         <div className="detail-section">
           <h4>Metadata</h4>
           <table className="nested-table">
@@ -251,7 +233,6 @@ function IncidentDetails({ inc }: { inc: IncidentEntry }) {
           </table>
         </div>
 
-        {/* Notes */}
         {inc.notes && (
           <div className="detail-section">
             <h4>Notes</h4>
@@ -259,7 +240,6 @@ function IncidentDetails({ inc }: { inc: IncidentEntry }) {
           </div>
         )}
 
-        {/* Raw Incident JSON */}
         <div className="detail-section" style={{ gridColumn: "1 / -1" }}>
           <h4>Raw Incident JSON</h4>
           <JsonView data={inc} initialExpanded={false} />
@@ -269,17 +249,9 @@ function IncidentDetails({ inc }: { inc: IncidentEntry }) {
   );
 }
 
-/* ── Evidence Event Row (expandable) ──────────────────── */
-
 function EvidenceEventRow({
-  eventId,
-  isExpanded,
-  onToggle,
-}: {
-  eventId: string;
-  isExpanded: boolean;
-  onToggle: () => void;
-}) {
+  eventId, isExpanded, onToggle,
+}: { eventId: string; isExpanded: boolean; onToggle: () => void }) {
   return (
     <>
       <tr className="clickable-row" onClick={onToggle}>
@@ -288,16 +260,12 @@ function EvidenceEventRow({
       </tr>
       {isExpanded && (
         <tr className="expanded-row">
-          <td colSpan={2}>
-            <EventDetailPanel eventId={eventId} />
-          </td>
+          <td colSpan={2}><EventDetailPanel eventId={eventId} /></td>
         </tr>
       )}
     </>
   );
 }
-
-/* ── Inline event detail panel (fetches on expand) ─────── */
 
 function EventDetailPanel({ eventId }: { eventId: string }) {
   const [viewMode, setViewMode] = useState<"table" | "raw">("table");
@@ -312,15 +280,10 @@ function EventDetailPanel({ eventId }: { eventId: string }) {
 
   const evt = data.event;
   const typeLabel = data.event_type === "signin" ? "Sign-In Log"
-    : data.event_type === "audit" ? "Audit Log"
-    : "Activity Log";
+    : data.event_type === "audit" ? "Audit Log" : "Activity Log";
 
-  const scalarEntries = Object.entries(evt).filter(
-    ([, v]) => v != null && v !== "" && typeof v !== "object"
-  );
-  const objectEntries = Object.entries(evt).filter(
-    ([, v]) => v != null && typeof v === "object"
-  );
+  const scalarEntries = Object.entries(evt).filter(([, v]) => v != null && v !== "" && typeof v !== "object");
+  const objectEntries = Object.entries(evt).filter(([, v]) => v != null && typeof v === "object");
 
   return (
     <div style={{ padding: "0.5rem 0" }}>

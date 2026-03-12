@@ -15,6 +15,7 @@ import {
   type EventLookupResult,
 } from "../api";
 import JsonView from "../components/JsonView";
+import SortableTable, { type ColumnDef } from "../components/SortableTable";
 
 export default function Dashboard() {
   const [expandedUser, setExpandedUser] = useState<string | null>(null);
@@ -47,7 +48,8 @@ export default function Dashboard() {
 
   return (
     <div>
-      <h1 className="page-heading">Dashboard</h1>
+      <h1 className="page-heading">Security Overview</h1>
+      <p className="page-subtitle">Log volume, risk scores, and key security metrics across your Entra ID environment</p>
 
       {/* KPI strip */}
       <div className="kpi-strip">
@@ -85,73 +87,60 @@ export default function Dashboard() {
         ) : highRiskUsers.length === 0 ? (
           <p style={{ color: "var(--text-secondary)" }}>No high-risk users at this time.</p>
         ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th></th>
-                  <th>User</th>
-                  <th>Score</th>
-                  <th>Base Risk</th>
-                  <th>Entra Risk</th>
-                  <th>Multiplier</th>
-                  <th>Windows</th>
-                </tr>
-              </thead>
-              <tbody>
-                {highRiskUsers.map((u) => (
-                  <RiskUserRow
-                    key={u.user_id}
-                    user={u}
-                    isExpanded={expandedUser === u.user_id}
-                    onToggle={() => setExpandedUser(expandedUser === u.user_id ? null : u.user_id)}
-                  />
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SortableTable
+            columns={riskColumns}
+            data={highRiskUsers}
+            rowKey={(u) => u.user_id}
+            expandedKey={expandedUser}
+            onToggleExpand={(key) => setExpandedUser(expandedUser === key ? null : (key as string))}
+            renderExpanded={(u) => <RiskUserDetails user={u} />}
+            defaultSort={{ key: "score", dir: "desc" }}
+            showGroupBy={false}
+          />
         )}
       </div>
     </div>
   );
 }
 
-/* ── Risk User Row (expandable) ─────────────────────────── */
+/* ── Risk user column definitions ──────────────────────── */
 
-function RiskUserRow({
-  user: u,
-  isExpanded,
-  onToggle,
-}: {
-  user: RiskScore;
-  isExpanded: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <>
-      <tr className="clickable-row" onClick={onToggle}>
-        <td className="expand-arrow">{isExpanded ? "▼" : "▶"}</td>
-        <td>{u.user_id}</td>
-        <td>
-          <span className={`badge badge-${scoreSeverity(u.score)}`}>
-            {u.score}
-          </span>
-        </td>
-        <td>{u.base_risk}</td>
-        <td>{u.entra_risk}</td>
-        <td>{u.multiplier}×</td>
-        <td>{u.active_windows}</td>
-      </tr>
-      {isExpanded && (
-        <tr className="expanded-row">
-          <td colSpan={7}>
-            <RiskUserDetails user={u} />
-          </td>
-        </tr>
-      )}
-    </>
-  );
-}
+const riskColumns: ColumnDef<RiskScore>[] = [
+  {
+    key: "user_id",
+    header: "User",
+    value: (u) => u.user_id,
+  },
+  {
+    key: "score",
+    header: "Score",
+    value: (u) => u.score,
+    render: (u) => (
+      <span className={`badge badge-${scoreSeverity(u.score)}`}>{u.score}</span>
+    ),
+  },
+  {
+    key: "base_risk",
+    header: "Base Risk",
+    value: (u) => u.base_risk,
+  },
+  {
+    key: "entra_risk",
+    header: "Entra Risk",
+    value: (u) => u.entra_risk,
+  },
+  {
+    key: "multiplier",
+    header: "Multiplier",
+    value: (u) => u.multiplier,
+    render: (u) => `${u.multiplier}×`,
+  },
+  {
+    key: "active_windows",
+    header: "Windows",
+    value: (u) => u.active_windows,
+  },
+];
 
 /* ── Expanded risk details panel ───────────────────────── */
 

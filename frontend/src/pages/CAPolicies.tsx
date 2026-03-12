@@ -88,6 +88,8 @@ export default function CAPolicies() {
 
   return (
     <div className="ca-page">
+      <h1 className="page-heading">Conditional Access Policies</h1>
+      <p className="page-subtitle">Visualize Conditional Access policies, coverage gaps, and policy overlaps</p>
       {/* ── KPI strip ──────────────────────────────────────── */}
       <div className="kpi-strip">
         <div className="kpi-card">

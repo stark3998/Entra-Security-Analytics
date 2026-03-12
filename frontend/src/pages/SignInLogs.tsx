@@ -2,8 +2,67 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchSignInLogs, type SignInLog, type PaginatedResponse } from "../api";
 import SyncStatusPanel from "../components/SyncStatusPanel";
+import SortableTable, { type ColumnDef } from "../components/SortableTable";
 
 const PAGE_SIZE = 50;
+
+const columns: ColumnDef<SignInLog>[] = [
+  {
+    key: "created_datetime",
+    header: "Time",
+    value: (r) => r.created_datetime,
+    render: (r) => fmtDate(r.created_datetime),
+  },
+  {
+    key: "user",
+    header: "User",
+    groupable: true,
+    value: (r) => r.user_display_name || r.user_principal_name,
+    render: (r) => (
+      <span title={r.user_principal_name}>
+        {r.user_display_name || r.user_principal_name}
+      </span>
+    ),
+  },
+  {
+    key: "app",
+    header: "App",
+    groupable: true,
+    value: (r) => r.app_display_name,
+  },
+  {
+    key: "ip",
+    header: "IP",
+    groupable: true,
+    value: (r) => r.ip_address,
+  },
+  {
+    key: "location",
+    header: "Location",
+    groupable: true,
+    value: (r) => [r.location_city, r.location_country].filter(Boolean).join(", "),
+  },
+  {
+    key: "risk",
+    header: "Risk",
+    groupable: true,
+    value: (r) => r.risk_level_during_signin,
+    render: (r) => <RiskBadge level={r.risk_level_during_signin} />,
+  },
+  {
+    key: "status",
+    header: "Status",
+    groupable: true,
+    value: (r) => r.status_error_code,
+    render: (r) => (r.status_error_code === 0 ? "✓" : `✗ ${r.status_error_code}`),
+  },
+  {
+    key: "ca",
+    header: "CA",
+    groupable: true,
+    value: (r) => r.conditional_access_status,
+  },
+];
 
 export default function SignInLogs() {
   const [offset, setOffset] = useState(0);
@@ -29,6 +88,7 @@ export default function SignInLogs() {
     <div>
       <div className="page-header-row">
         <h1 className="page-heading">Sign-In Logs</h1>
+        <p className="page-subtitle">Entra ID authentication events — filter by user, risk level, and sign-in status</p>
         <SyncStatusPanel invalidateKeys={[["signin-logs"]]} />
       </div>
 
@@ -56,36 +116,12 @@ export default function SignInLogs() {
         {isLoading ? (
           <p className="loading">Loading…</p>
         ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>User</th>
-                  <th>App</th>
-                  <th>IP</th>
-                  <th>Location</th>
-                  <th>Risk</th>
-                  <th>Status</th>
-                  <th>CA</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((r) => (
-                  <tr key={r.id}>
-                    <td>{fmtDate(r.created_datetime)}</td>
-                    <td title={r.user_principal_name}>{r.user_display_name || r.user_principal_name}</td>
-                    <td>{r.app_display_name}</td>
-                    <td>{r.ip_address}</td>
-                    <td>{[r.location_city, r.location_country].filter(Boolean).join(", ")}</td>
-                    <td><RiskBadge level={r.risk_level_during_signin} /></td>
-                    <td>{r.status_error_code === 0 ? "✓" : `✗ ${r.status_error_code}`}</td>
-                    <td>{r.conditional_access_status}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SortableTable
+            columns={columns}
+            data={items}
+            rowKey={(r) => r.id}
+            defaultSort={{ key: "created_datetime", dir: "desc" }}
+          />
         )}
 
         <Pagination offset={offset} total={total} pageSize={PAGE_SIZE} onChange={setOffset} />

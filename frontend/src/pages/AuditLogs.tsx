@@ -2,8 +2,55 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchAuditLogs, type AuditLogEntry, type PaginatedResponse } from "../api";
 import SyncStatusPanel from "../components/SyncStatusPanel";
+import SortableTable, { type ColumnDef } from "../components/SortableTable";
 
 const PAGE_SIZE = 50;
+
+const columns: ColumnDef<AuditLogEntry>[] = [
+  {
+    key: "activity_datetime",
+    header: "Time",
+    value: (r) => r.activity_datetime,
+    render: (r) => fmtDate(r.activity_datetime),
+  },
+  {
+    key: "category",
+    header: "Category",
+    groupable: true,
+    value: (r) => r.category,
+  },
+  {
+    key: "activity_display_name",
+    header: "Activity",
+    groupable: true,
+    value: (r) => r.activity_display_name,
+  },
+  {
+    key: "result",
+    header: "Result",
+    groupable: true,
+    value: (r) => r.result,
+  },
+  {
+    key: "initiated_by_user",
+    header: "Initiated By (User)",
+    groupable: true,
+    value: (r) => r.initiated_by_user,
+  },
+  {
+    key: "initiated_by_app",
+    header: "Initiated By (App)",
+    groupable: true,
+    value: (r) => r.initiated_by_app,
+  },
+  {
+    key: "targets",
+    header: "Targets",
+    sortable: false,
+    value: (r) => summarizeTargets(r.target_resources),
+    render: (r) => summarizeTargets(r.target_resources),
+  },
+];
 
 export default function AuditLogs() {
   const [offset, setOffset] = useState(0);
@@ -28,7 +75,8 @@ export default function AuditLogs() {
   return (
     <div>
       <div className="page-header-row">
-        <h1 className="page-heading">Audit Logs</h1>
+        <h1 className="page-heading">Directory Audit Logs</h1>
+        <p className="page-subtitle">Entra ID directory changes — role updates, app registrations, and policy modifications</p>
         <SyncStatusPanel invalidateKeys={[["audit-logs"]]} />
       </div>
 
@@ -51,34 +99,12 @@ export default function AuditLogs() {
         {isLoading ? (
           <p className="loading">Loading…</p>
         ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Category</th>
-                  <th>Activity</th>
-                  <th>Result</th>
-                  <th>Initiated By (User)</th>
-                  <th>Initiated By (App)</th>
-                  <th>Targets</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((r) => (
-                  <tr key={r.id}>
-                    <td>{fmtDate(r.activity_datetime)}</td>
-                    <td>{r.category}</td>
-                    <td>{r.activity_display_name}</td>
-                    <td>{r.result}</td>
-                    <td>{r.initiated_by_user}</td>
-                    <td>{r.initiated_by_app}</td>
-                    <td>{summarizeTargets(r.target_resources)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SortableTable
+            columns={columns}
+            data={items}
+            rowKey={(r) => r.id}
+            defaultSort={{ key: "activity_datetime", dir: "desc" }}
+          />
         )}
 
         <Pagination offset={offset} total={total} pageSize={PAGE_SIZE} onChange={setOffset} />

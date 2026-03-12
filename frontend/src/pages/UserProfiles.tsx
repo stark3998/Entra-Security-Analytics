@@ -8,8 +8,67 @@ import {
   type UserProfileDetail,
   type PaginatedResponse,
 } from "../api";
+import SortableTable, { type ColumnDef } from "../components/SortableTable";
 
 const PAGE_SIZE = 30;
+
+const columns: ColumnDef<UserProfile>[] = [
+  {
+    key: "user",
+    header: "User",
+    value: (p) => p.user_display_name || p.user_principal_name,
+    render: (p) => (
+      <div className="user-cell">
+        <span className="user-name">{p.user_display_name || p.user_principal_name}</span>
+        <span className="user-upn">{p.user_principal_name}</span>
+      </div>
+    ),
+  },
+  {
+    key: "total_sign_ins",
+    header: "Sign-Ins",
+    value: (p) => p.total_sign_ins,
+  },
+  {
+    key: "locations",
+    header: "Locations",
+    value: (p) => p.known_locations.length,
+  },
+  {
+    key: "devices",
+    header: "Devices",
+    value: (p) => p.known_devices.length,
+  },
+  {
+    key: "ips",
+    header: "IPs",
+    value: (p) => p.known_ips.length,
+  },
+  {
+    key: "first_seen",
+    header: "First Seen",
+    value: (p) => p.first_seen,
+    render: (p) => fmtDate(p.first_seen),
+  },
+  {
+    key: "last_seen",
+    header: "Last Seen",
+    value: (p) => p.last_seen,
+    render: (p) => fmtDate(p.last_seen),
+  },
+  {
+    key: "risk",
+    header: "Risk",
+    groupable: true,
+    value: (p) => (p.is_risky ? "Risky" : "Normal"),
+    render: (p) =>
+      p.is_risky ? (
+        <span className="badge badge-critical">RISKY</span>
+      ) : (
+        <span className="badge badge-info">Normal</span>
+      ),
+  },
+];
 
 export default function UserProfiles() {
   const [offset, setOffset] = useState(0);
@@ -47,7 +106,8 @@ export default function UserProfiles() {
   return (
     <div>
       <div className="page-header-row">
-        <h1 className="page-heading">User Sign-In Profiles</h1>
+        <h1 className="page-heading">User Risk Profiles</h1>
+        <p className="page-subtitle">Per-user risk scoring, sign-in patterns, and behavioral anomaly detection</p>
         <button
           className="btn btn-primary btn-sm"
           onClick={handleRefresh}
@@ -78,92 +138,23 @@ export default function UserProfiles() {
       <div className="card">
         {isLoading ? (
           <p className="loading">Loading…</p>
+        ) : items.length === 0 ? (
+          <p className="loading">No user profiles found. Run a sync to build profiles.</p>
         ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th></th>
-                  <th>User</th>
-                  <th>Sign-Ins</th>
-                  <th>Locations</th>
-                  <th>Devices</th>
-                  <th>IPs</th>
-                  <th>First Seen</th>
-                  <th>Last Seen</th>
-                  <th>Risk</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((p) => (
-                  <UserRow
-                    key={p.user_principal_name}
-                    profile={p}
-                    isExpanded={expandedUser === p.user_principal_name}
-                    onToggle={() =>
-                      setExpandedUser(
-                        expandedUser === p.user_principal_name ? null : p.user_principal_name
-                      )
-                    }
-                  />
-                ))}
-                {items.length === 0 && (
-                  <tr><td colSpan={9} className="loading">No user profiles found. Run a sync to build profiles.</td></tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+          <SortableTable
+            columns={columns}
+            data={items}
+            rowKey={(p) => p.user_principal_name}
+            expandedKey={expandedUser}
+            onToggleExpand={(key) => setExpandedUser(expandedUser === key ? null : (key as string))}
+            renderExpanded={(p) => <UserDetails upn={p.user_principal_name} profile={p} />}
+            defaultSort={{ key: "last_seen", dir: "desc" }}
+          />
         )}
 
         <Pagination offset={offset} total={total} pageSize={PAGE_SIZE} onChange={setOffset} />
       </div>
     </div>
-  );
-}
-
-/* ── User Row (expandable) ──────────────────────────────── */
-
-function UserRow({
-  profile: p,
-  isExpanded,
-  onToggle,
-}: {
-  profile: UserProfile;
-  isExpanded: boolean;
-  onToggle: () => void;
-}) {
-  return (
-    <>
-      <tr className="clickable-row" onClick={onToggle}>
-        <td className="expand-arrow">{isExpanded ? "▼" : "▶"}</td>
-        <td>
-          <div className="user-cell">
-            <span className="user-name">{p.user_display_name || p.user_principal_name}</span>
-            <span className="user-upn">{p.user_principal_name}</span>
-          </div>
-        </td>
-        <td>{p.total_sign_ins}</td>
-        <td>{p.known_locations.length}</td>
-        <td>{p.known_devices.length}</td>
-        <td>{p.known_ips.length}</td>
-        <td>{fmtDate(p.first_seen)}</td>
-        <td>{fmtDate(p.last_seen)}</td>
-        <td>
-          {p.is_risky ? (
-            <span className="badge badge-critical">RISKY</span>
-          ) : (
-            <span className="badge badge-info">Normal</span>
-          )}
-        </td>
-      </tr>
-      {isExpanded && (
-        <tr className="expanded-row">
-          <td colSpan={9}>
-            <UserDetails upn={p.user_principal_name} profile={p} />
-          </td>
-        </tr>
-      )}
-    </>
   );
 }
 
@@ -177,7 +168,6 @@ function UserDetails({ upn, profile }: { upn: string; profile: UserProfile }) {
 
   return (
     <div className="user-detail-panel">
-      {/* Risk reasons */}
       {profile.is_risky && profile.risk_reasons.length > 0 && (
         <div className="risk-alert">
           <strong>Risk Reasons:</strong>
@@ -190,30 +180,18 @@ function UserDetails({ upn, profile }: { upn: string; profile: UserProfile }) {
       )}
 
       <div className="detail-grid">
-        {/* Known Locations */}
         <div className="detail-section">
           <h4>Known Locations ({profile.known_locations.length})</h4>
           <div className="table-wrapper">
             <table className="nested-table">
               <thead>
-                <tr>
-                  <th>City</th>
-                  <th>State</th>
-                  <th>Country</th>
-                  <th>Count</th>
-                  <th>First Seen</th>
-                  <th>Last Seen</th>
-                </tr>
+                <tr><th>City</th><th>State</th><th>Country</th><th>Count</th><th>First Seen</th><th>Last Seen</th></tr>
               </thead>
               <tbody>
                 {profile.known_locations.map((loc, i) => (
                   <tr key={i}>
-                    <td>{loc.city || "–"}</td>
-                    <td>{loc.state || "–"}</td>
-                    <td>{loc.country || "–"}</td>
-                    <td>{loc.count}</td>
-                    <td>{fmtDate(loc.first_seen)}</td>
-                    <td>{fmtDate(loc.last_seen)}</td>
+                    <td>{loc.city || "–"}</td><td>{loc.state || "–"}</td><td>{loc.country || "–"}</td>
+                    <td>{loc.count}</td><td>{fmtDate(loc.first_seen)}</td><td>{fmtDate(loc.last_seen)}</td>
                   </tr>
                 ))}
                 {profile.known_locations.length === 0 && (
@@ -224,28 +202,18 @@ function UserDetails({ upn, profile }: { upn: string; profile: UserProfile }) {
           </div>
         </div>
 
-        {/* Known Devices */}
         <div className="detail-section">
           <h4>Known Devices ({profile.known_devices.length})</h4>
           <div className="table-wrapper">
             <table className="nested-table">
               <thead>
-                <tr>
-                  <th>OS</th>
-                  <th>Browser</th>
-                  <th>Count</th>
-                  <th>First Seen</th>
-                  <th>Last Seen</th>
-                </tr>
+                <tr><th>OS</th><th>Browser</th><th>Count</th><th>First Seen</th><th>Last Seen</th></tr>
               </thead>
               <tbody>
                 {profile.known_devices.map((dev, i) => (
                   <tr key={i}>
-                    <td>{dev.device_os || "–"}</td>
-                    <td>{dev.device_browser || "–"}</td>
-                    <td>{dev.count}</td>
-                    <td>{fmtDate(dev.first_seen)}</td>
-                    <td>{fmtDate(dev.last_seen)}</td>
+                    <td>{dev.device_os || "–"}</td><td>{dev.device_browser || "–"}</td>
+                    <td>{dev.count}</td><td>{fmtDate(dev.first_seen)}</td><td>{fmtDate(dev.last_seen)}</td>
                   </tr>
                 ))}
                 {profile.known_devices.length === 0 && (
@@ -256,26 +224,18 @@ function UserDetails({ upn, profile }: { upn: string; profile: UserProfile }) {
           </div>
         </div>
 
-        {/* Known IPs */}
         <div className="detail-section">
           <h4>Known IPs ({profile.known_ips.length})</h4>
           <div className="table-wrapper">
             <table className="nested-table">
               <thead>
-                <tr>
-                  <th>IP Address</th>
-                  <th>Count</th>
-                  <th>First Seen</th>
-                  <th>Last Seen</th>
-                </tr>
+                <tr><th>IP Address</th><th>Count</th><th>First Seen</th><th>Last Seen</th></tr>
               </thead>
               <tbody>
                 {profile.known_ips.map((ip, i) => (
                   <tr key={i}>
-                    <td>{ip.ip_address}</td>
-                    <td>{ip.count}</td>
-                    <td>{fmtDate(ip.first_seen)}</td>
-                    <td>{fmtDate(ip.last_seen)}</td>
+                    <td>{ip.ip_address}</td><td>{ip.count}</td>
+                    <td>{fmtDate(ip.first_seen)}</td><td>{fmtDate(ip.last_seen)}</td>
                   </tr>
                 ))}
                 {profile.known_ips.length === 0 && (
@@ -286,7 +246,6 @@ function UserDetails({ upn, profile }: { upn: string; profile: UserProfile }) {
           </div>
         </div>
 
-        {/* Sign-In Hour Histogram */}
         <div className="detail-section">
           <h4>Sign-In Time Pattern (UTC)</h4>
           <div className="hour-histogram">
@@ -304,7 +263,6 @@ function UserDetails({ upn, profile }: { upn: string; profile: UserProfile }) {
         </div>
       </div>
 
-      {/* Recent Sign-In Logs */}
       <div className="detail-section" style={{ marginTop: "1rem" }}>
         <h4>Recent Sign-In Logs</h4>
         {isLoading ? (
@@ -313,15 +271,7 @@ function UserDetails({ upn, profile }: { upn: string; profile: UserProfile }) {
           <div className="table-wrapper">
             <table className="nested-table">
               <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>App</th>
-                  <th>IP</th>
-                  <th>Location</th>
-                  <th>Device</th>
-                  <th>Risk</th>
-                  <th>Status</th>
-                </tr>
+                <tr><th>Time</th><th>App</th><th>IP</th><th>Location</th><th>Device</th><th>Risk</th><th>Status</th></tr>
               </thead>
               <tbody>
                 {(data?.recent_signin_logs ?? []).map((log) => (

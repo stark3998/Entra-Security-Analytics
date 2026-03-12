@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { fetchRules, patchRule, deleteRule, type RuleEntry, type PaginatedResponse } from "../api";
+import SortableTable, { type ColumnDef } from "../components/SortableTable";
 
 const PAGE_SIZE = 50;
 
@@ -27,9 +28,92 @@ export default function RulesPage() {
   const total = data?.total ?? 0;
   const items = data?.items ?? [];
 
+  const columns: ColumnDef<RuleEntry>[] = [
+    {
+      key: "slug",
+      header: "Slug",
+      value: (r) => r.slug,
+      className: "mono",
+    },
+    {
+      key: "name",
+      header: "Name",
+      value: (r) => r.name,
+    },
+    {
+      key: "severity",
+      header: "Severity",
+      groupable: true,
+      value: (r) => r.severity,
+      render: (r) => <span className={`badge badge-${r.severity}`}>{r.severity}</span>,
+    },
+    {
+      key: "risk_points",
+      header: "Risk Pts",
+      value: (r) => r.risk_points,
+    },
+    {
+      key: "watch_window_days",
+      header: "Window (d)",
+      value: (r) => r.watch_window_days,
+      render: (r) => String(r.watch_window_days ?? "–"),
+    },
+    {
+      key: "type",
+      header: "Type",
+      groupable: true,
+      value: (r) => (r.is_system ? "System" : "Custom"),
+      render: (r) =>
+        r.is_system ? (
+          <span className="badge badge-info" title="System rule">System</span>
+        ) : (
+          "Custom"
+        ),
+    },
+    {
+      key: "enabled",
+      header: "Enabled",
+      groupable: true,
+      value: (r) => r.enabled,
+      render: (r) => (
+        <label className="toggle" onClick={(e) => e.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={r.enabled}
+            onChange={() => toggleMutation.mutate({ id: r.id, enabled: !r.enabled })}
+            disabled={toggleMutation.isPending}
+          />
+          <span className="slider" />
+        </label>
+      ),
+    },
+    {
+      key: "actions",
+      header: "Actions",
+      sortable: false,
+      value: () => "",
+      render: (r) =>
+        !r.is_system ? (
+          <button
+            className="btn btn-sm btn-danger"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (confirm(`Delete rule "${r.name}"?`)) {
+                deleteMutation.mutate(r.id);
+              }
+            }}
+            disabled={deleteMutation.isPending}
+          >
+            Delete
+          </button>
+        ) : null,
+    },
+  ];
+
   return (
     <div>
-      <h1 className="page-heading">Correlation Rules</h1>
+      <h1 className="page-heading">Detection Rules</h1>
+      <p className="page-subtitle">Manage correlation rules that analyze logs and generate security incidents</p>
 
       {error && <div className="error-box">{String(error)}</div>}
 
@@ -37,62 +121,12 @@ export default function RulesPage() {
         {isLoading ? (
           <p className="loading">Loading…</p>
         ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Slug</th>
-                  <th>Name</th>
-                  <th>Severity</th>
-                  <th>Risk Pts</th>
-                  <th>Window (d)</th>
-                  <th>Type</th>
-                  <th>Enabled</th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((rule) => (
-                  <tr key={rule.id}>
-                    <td className="mono">{rule.slug}</td>
-                    <td>{rule.name}</td>
-                    <td><span className={`badge badge-${rule.severity}`}>{rule.severity}</span></td>
-                    <td>{rule.risk_points}</td>
-                    <td>{rule.watch_window_days ?? "–"}</td>
-                    <td>{rule.is_system ? <span className="badge badge-system" title="System rule">🔒 System</span> : "Custom"}</td>
-                    <td>
-                      <label className="toggle">
-                        <input
-                          type="checkbox"
-                          checked={rule.enabled}
-                          onChange={() =>
-                            toggleMutation.mutate({ id: rule.id, enabled: !rule.enabled })
-                          }
-                          disabled={toggleMutation.isPending}
-                        />
-                        <span className="slider" />
-                      </label>
-                    </td>
-                    <td>
-                      {!rule.is_system && (
-                        <button
-                          className="btn btn-sm btn-danger"
-                          onClick={() => {
-                            if (confirm(`Delete rule "${rule.name}"?`)) {
-                              deleteMutation.mutate(rule.id);
-                            }
-                          }}
-                          disabled={deleteMutation.isPending}
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SortableTable
+            columns={columns}
+            data={items}
+            rowKey={(r) => r.id}
+            defaultSort={{ key: "name", dir: "asc" }}
+          />
         )}
 
         <Pagination offset={offset} total={total} pageSize={PAGE_SIZE} onChange={setOffset} />

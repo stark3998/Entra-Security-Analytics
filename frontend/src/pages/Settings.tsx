@@ -94,7 +94,8 @@ export default function Settings() {
 
   return (
     <div className="settings-page">
-      <h2>Settings</h2>
+      <h1 className="page-heading">Configuration</h1>
+      <p className="page-subtitle">Authentication mode, app registration credentials, and sync settings</p>
 
       {error && <div className="alert alert-error">{error}</div>}
       {success && <div className="alert alert-success">{success}</div>}

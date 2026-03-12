@@ -15,6 +15,7 @@ from app.api.routes_dashboard import router as dashboard_router
 from app.api.routes_incidents import router as incidents_router
 from app.api.routes_logs import router as logs_router
 from app.api.routes_rules import router as rules_router
+from app.api.routes_pim import router as pim_router
 from app.api.routes_user_profiles import router as user_profiles_router
 from app.auth.token_validator import get_current_user
 from app.config import get_settings
@@ -82,6 +83,7 @@ def create_app() -> FastAPI:
     app.include_router(rules_router, dependencies=auth_dep)
     app.include_router(dashboard_router, dependencies=auth_dep)
     app.include_router(capolicies_router, dependencies=auth_dep)
+    app.include_router(pim_router, dependencies=auth_dep)
     app.include_router(user_profiles_router, dependencies=auth_dep)
 
     @app.get("/health")

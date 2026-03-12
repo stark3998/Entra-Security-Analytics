@@ -450,6 +450,98 @@ class PolicyCoverageCache(Base):
     policy = relationship("ConditionalAccessPolicy", back_populates="coverage_entries")
 
 
+# ── PIM (Privileged Identity Management) Models ──────────────
+
+
+class PIMRoleDefinition(Base):
+    """Entra ID directory role definition."""
+
+    __tablename__ = "pim_role_definitions"
+
+    id = Column(String, primary_key=True)
+    display_name = Column(String, nullable=False)
+    description = Column(Text, default="")
+    is_built_in = Column(Boolean, default=True)
+    is_enabled = Column(Boolean, default=True)
+    raw_json = Column(JSON, default=dict)
+    synced_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+class PIMRoleAssignment(Base):
+    """Active PIM role assignment (currently in effect)."""
+
+    __tablename__ = "pim_role_assignments"
+
+    id = Column(String, primary_key=True)
+    principal_id = Column(String, nullable=False, index=True)
+    principal_display_name = Column(String, default="")
+    principal_type = Column(String, default="")
+    role_definition_id = Column(String, nullable=False, index=True)
+    role_display_name = Column(String, default="")
+    directory_scope_id = Column(String, default="/")
+    assignment_type = Column(String, default="")
+    member_type = Column(String, default="")
+    start_date_time = Column(DateTime(timezone=True), nullable=True)
+    end_date_time = Column(DateTime(timezone=True), nullable=True)
+    raw_json = Column(JSON, default=dict)
+    synced_at = Column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_pim_assign_principal", "principal_id"),
+        Index("ix_pim_assign_role", "role_definition_id"),
+    )
+
+
+class PIMRoleEligibility(Base):
+    """Eligible PIM role assignment (can be activated)."""
+
+    __tablename__ = "pim_role_eligibilities"
+
+    id = Column(String, primary_key=True)
+    principal_id = Column(String, nullable=False, index=True)
+    principal_display_name = Column(String, default="")
+    principal_type = Column(String, default="")
+    role_definition_id = Column(String, nullable=False, index=True)
+    role_display_name = Column(String, default="")
+    directory_scope_id = Column(String, default="/")
+    member_type = Column(String, default="")
+    start_date_time = Column(DateTime(timezone=True), nullable=True)
+    end_date_time = Column(DateTime(timezone=True), nullable=True)
+    raw_json = Column(JSON, default=dict)
+    synced_at = Column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_pim_elig_principal", "principal_id"),
+        Index("ix_pim_elig_role", "role_definition_id"),
+    )
+
+
+class PIMActivationRequest(Base):
+    """PIM role activation/deactivation request."""
+
+    __tablename__ = "pim_activation_requests"
+
+    id = Column(String, primary_key=True)
+    principal_id = Column(String, nullable=False, index=True)
+    principal_display_name = Column(String, default="")
+    role_definition_id = Column(String, nullable=False, index=True)
+    role_display_name = Column(String, default="")
+    action = Column(String, default="")
+    status = Column(String, default="")
+    justification = Column(Text, default="")
+    created_date_time = Column(DateTime(timezone=True), nullable=True, index=True)
+    schedule_start = Column(DateTime(timezone=True), nullable=True)
+    schedule_end = Column(DateTime(timezone=True), nullable=True)
+    raw_json = Column(JSON, default=dict)
+    synced_at = Column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_pim_req_principal", "principal_id"),
+        Index("ix_pim_req_role", "role_definition_id"),
+        Index("ix_pim_req_created", "created_date_time"),
+    )
+
+
 # ── Engine & Session Factory ──────────────────────────────────
 
 

@@ -2,8 +2,65 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { fetchActivityLogs, type ActivityLog, type PaginatedResponse } from "../api";
 import SyncStatusPanel from "../components/SyncStatusPanel";
+import SortableTable, { type ColumnDef } from "../components/SortableTable";
 
 const PAGE_SIZE = 50;
+
+const columns: ColumnDef<ActivityLog>[] = [
+  {
+    key: "creation_time",
+    header: "Time",
+    value: (r) => r.creation_time,
+    render: (r) => fmtDate(r.creation_time),
+  },
+  {
+    key: "source",
+    header: "Source",
+    groupable: true,
+    value: (r) => r.source,
+    render: (r) => (
+      <span className={`badge badge-${sourceBadge(r.source)}`}>{r.source}</span>
+    ),
+  },
+  {
+    key: "workload",
+    header: "Workload",
+    groupable: true,
+    value: (r) => r.workload,
+  },
+  {
+    key: "operation",
+    header: "Operation",
+    groupable: true,
+    value: (r) => r.operation,
+  },
+  {
+    key: "user_id",
+    header: "User",
+    groupable: true,
+    value: (r) => r.user_id,
+  },
+  {
+    key: "client_ip",
+    header: "IP",
+    groupable: true,
+    value: (r) => r.client_ip,
+  },
+  {
+    key: "result_status",
+    header: "Status",
+    groupable: true,
+    value: (r) => r.result_status || "–",
+  },
+  {
+    key: "object_id",
+    header: "Object",
+    value: (r) => r.object_id,
+    render: (r) => (
+      <span title={r.object_id}>{truncate(r.object_id, 40)}</span>
+    ),
+  },
+];
 
 export default function ActivityLogs() {
   const [offset, setOffset] = useState(0);
@@ -28,7 +85,8 @@ export default function ActivityLogs() {
   return (
     <div>
       <div className="page-header-row">
-        <h1 className="page-heading">Activity Logs</h1>
+        <h1 className="page-heading">Activity Timeline</h1>
+        <p className="page-subtitle">Unified timeline of all collected cloud activity across log sources</p>
         <SyncStatusPanel invalidateKeys={[["activity-logs"]]} />
       </div>
 
@@ -52,36 +110,12 @@ export default function ActivityLogs() {
         {isLoading ? (
           <p className="loading">Loading…</p>
         ) : (
-          <div className="table-wrapper">
-            <table>
-              <thead>
-                <tr>
-                  <th>Time</th>
-                  <th>Source</th>
-                  <th>Workload</th>
-                  <th>Operation</th>
-                  <th>User</th>
-                  <th>IP</th>
-                  <th>Status</th>
-                  <th>Object</th>
-                </tr>
-              </thead>
-              <tbody>
-                {items.map((r) => (
-                  <tr key={r.id}>
-                    <td>{fmtDate(r.creation_time)}</td>
-                    <td><span className={`badge badge-${sourceBadge(r.source)}`}>{r.source}</span></td>
-                    <td>{r.workload}</td>
-                    <td>{r.operation}</td>
-                    <td>{r.user_id}</td>
-                    <td>{r.client_ip}</td>
-                    <td>{r.result_status || "–"}</td>
-                    <td title={r.object_id}>{truncate(r.object_id, 40)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <SortableTable
+            columns={columns}
+            data={items}
+            rowKey={(r) => r.id}
+            defaultSort={{ key: "creation_time", dir: "desc" }}
+          />
         )}
 
         <Pagination offset={offset} total={total} pageSize={PAGE_SIZE} onChange={setOffset} />

@@ -672,3 +672,127 @@ export function fetchSignInGroupedByUser(params: Record<string, string> = {}) {
   const qs = new URLSearchParams(params).toString();
   return request<PaginatedResponse<GroupedUserEntry>>(`${BASE}/users/signin-grouped?${qs}`);
 }
+
+/* ── PIM (Privileged Identity Management) ────────────────── */
+
+export interface PIMRoleDefinition {
+  id: string;
+  display_name: string;
+  description: string;
+  is_built_in: boolean;
+  is_enabled: boolean;
+}
+
+export interface PIMAssignment {
+  id: string;
+  principal_id: string;
+  principal_display_name: string;
+  principal_type: string;
+  role_definition_id: string;
+  role_display_name: string;
+  directory_scope_id: string;
+  assignment_type: string;
+  member_type: string;
+  start_date_time: string | null;
+  end_date_time: string | null;
+  is_permanent: boolean;
+  raw_json: Record<string, unknown>;
+}
+
+export interface PIMEligibility {
+  id: string;
+  principal_id: string;
+  principal_display_name: string;
+  principal_type: string;
+  role_definition_id: string;
+  role_display_name: string;
+  directory_scope_id: string;
+  member_type: string;
+  start_date_time: string | null;
+  end_date_time: string | null;
+  raw_json: Record<string, unknown>;
+}
+
+export interface PIMActivation {
+  id: string;
+  principal_id: string;
+  principal_display_name: string;
+  role_definition_id: string;
+  role_display_name: string;
+  action: string;
+  status: string;
+  justification: string;
+  created_date_time: string | null;
+  schedule_start: string | null;
+  schedule_end: string | null;
+  raw_json: Record<string, unknown>;
+}
+
+export interface PIMAuditLog {
+  id: string;
+  activity_display_name: string;
+  activity_date_time: string | null;
+  category: string;
+  result: string;
+  result_reason: string;
+  initiated_by_user_upn: string;
+  initiated_by_user_display_name: string;
+  initiated_by_app_display_name: string;
+  target_resources: unknown[];
+  additional_details: unknown[];
+  raw_json: Record<string, unknown>;
+}
+
+export interface PIMStats {
+  total_assignments: number;
+  total_eligibilities: number;
+  permanent_assignments: number;
+  activations_24h: number;
+  activations_7d: number;
+}
+
+export interface PIMInsights {
+  top_activated_roles: { role: string; count: number }[];
+  top_activating_users: { user: string; count: number }[];
+  role_distribution: { role: string; active: number; eligible: number }[];
+  permanent_vs_timebound: { permanent: number; time_bound: number };
+}
+
+export function fetchPIMRoleDefinitions() {
+  return request<{ total: number; items: PIMRoleDefinition[] }>(`${BASE}/pim/role-definitions`);
+}
+
+export function fetchPIMAssignments(params: Record<string, string> = {}) {
+  const qs = new URLSearchParams(params).toString();
+  return request<PaginatedResponse<PIMAssignment>>(`${BASE}/pim/assignments?${qs}`);
+}
+
+export function fetchPIMEligibilities(params: Record<string, string> = {}) {
+  const qs = new URLSearchParams(params).toString();
+  return request<PaginatedResponse<PIMEligibility>>(`${BASE}/pim/eligibilities?${qs}`);
+}
+
+export function fetchPIMActivations(params: Record<string, string> = {}) {
+  const qs = new URLSearchParams(params).toString();
+  return request<PaginatedResponse<PIMActivation>>(`${BASE}/pim/activations?${qs}`);
+}
+
+export function fetchPIMAuditLogs(params: Record<string, string> = {}) {
+  const qs = new URLSearchParams(params).toString();
+  return request<PaginatedResponse<PIMAuditLog>>(`${BASE}/pim/audit-logs?${qs}`);
+}
+
+export function fetchPIMStats() {
+  return request<PIMStats>(`${BASE}/pim/stats`);
+}
+
+export function fetchPIMInsights() {
+  return request<PIMInsights>(`${BASE}/pim/insights`);
+}
+
+export function syncPIM() {
+  return request<{ status: string; synced: Record<string, number> }>(
+    `${BASE}/pim/sync`,
+    { method: "POST" }
+  );
+}

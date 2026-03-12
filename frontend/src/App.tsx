@@ -10,6 +10,7 @@ import RulesPage from "./pages/RulesPage";
 import CAPolicies from "./pages/CAPolicies";
 import PIMDashboard from "./pages/PIMDashboard";
 import Settings from "./pages/Settings";
+import UserDirectory from "./pages/UserDirectory";
 import UserProfiles from "./pages/UserProfiles";
 
 interface NavItem {
@@ -72,6 +73,12 @@ const links: NavItem[] = [
     to: "/pim",
     label: "Privileged Access",
     tooltip: "PIM role assignments, activations, eligibilities, and privileged access insights",
+    section: "identity",
+  },
+  {
+    to: "/users",
+    label: "User Directory",
+    tooltip: "Entra ID user profiles — search, filter, and view full Graph API details",
     section: "identity",
   },
   {
@@ -162,6 +169,7 @@ export default function App() {
               <Route path="/rules" element={<RulesPage />} />
               <Route path="/ca-policies" element={<CAPolicies />} />
               <Route path="/pim" element={<PIMDashboard />} />
+              <Route path="/users" element={<UserDirectory />} />
               <Route path="/settings" element={<Settings />} />
             </Routes>
           )}

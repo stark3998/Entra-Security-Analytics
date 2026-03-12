@@ -105,6 +105,100 @@ def update_incident(incident_id: int, body: IncidentUpdate, db: Session = Depend
     return _inc_to_dict(inc)
 
 
+@router.post("/recompute")
+def recompute_incidents(db: Session = Depends(get_db)):
+    """Re-run correlation rules, meta-rules, and anomaly detection on all existing logs.
+
+    This evaluates *all* persisted log records against enabled rules,
+    creating new incidents for any matches that don't already exist.
+    """
+    import logging as _logging
+
+    from app.analyzers.anomaly import AnomalyDetector
+    from app.analyzers.rules_engine import CorrelationRulesEngine
+    from app.models.database import AuditLog, LogSource, O365ActivityLog, SignInLog
+
+    _logger = _logging.getLogger(__name__)
+    all_incidents = []
+
+    # 1. Evaluate correlation rules on all sign-in logs
+    try:
+        sign_in_logs = db.query(SignInLog).all()
+        if sign_in_logs:
+            engine = CorrelationRulesEngine(db)
+            incs = engine.evaluate_new_logs(sign_in_logs, LogSource.ENTRA_SIGNIN)
+            all_incidents.extend(incs)
+            db.commit()
+            _logger.info("Recompute: %d incidents from sign-in logs", len(incs))
+    except Exception:
+        _logger.exception("Recompute: sign-in log evaluation failed")
+        db.rollback()
+
+    # 2. Evaluate correlation rules on all audit logs
+    try:
+        audit_logs = db.query(AuditLog).all()
+        if audit_logs:
+            engine = CorrelationRulesEngine(db)
+            incs = engine.evaluate_new_logs(audit_logs, LogSource.ENTRA_AUDIT)
+            all_incidents.extend(incs)
+            db.commit()
+            _logger.info("Recompute: %d incidents from audit logs", len(incs))
+    except Exception:
+        _logger.exception("Recompute: audit log evaluation failed")
+        db.rollback()
+
+    # 3. Evaluate correlation rules on O365 activity logs
+    for source in [LogSource.OFFICE365, LogSource.SHAREPOINT, LogSource.POWERAPPS]:
+        try:
+            logs = db.query(O365ActivityLog).filter(O365ActivityLog.source == source).all()
+            if logs:
+                engine = CorrelationRulesEngine(db)
+                incs = engine.evaluate_new_logs(logs, source)
+                all_incidents.extend(incs)
+                db.commit()
+                _logger.info("Recompute: %d incidents from %s", len(incs), source.value)
+        except Exception:
+            _logger.exception("Recompute: %s evaluation failed", source.value)
+            db.rollback()
+
+    # 4. Meta-rules
+    try:
+        engine = CorrelationRulesEngine(db)
+        meta_incs = engine.evaluate_meta_rules()
+        all_incidents.extend(meta_incs)
+        db.commit()
+        _logger.info("Recompute: %d incidents from meta-rules", len(meta_incs))
+    except Exception:
+        _logger.exception("Recompute: meta-rule evaluation failed")
+        db.rollback()
+
+    # 5. Anomaly detection
+    try:
+        detector = AnomalyDetector(db)
+        anomaly_incs = detector.detect_all()
+        all_incidents.extend(anomaly_incs)
+        db.commit()
+        _logger.info("Recompute: %d incidents from anomaly detection", len(anomaly_incs))
+    except Exception:
+        _logger.exception("Recompute: anomaly detection failed")
+        db.rollback()
+
+    # 6. Expire stale watch windows
+    try:
+        engine = CorrelationRulesEngine(db)
+        expired = engine.expire_watch_windows()
+        db.commit()
+        _logger.info("Recompute: expired %d watch windows", expired)
+    except Exception:
+        _logger.exception("Recompute: watch window expiration failed")
+        db.rollback()
+
+    return {
+        "status": "ok",
+        "new_incidents": len(all_incidents),
+    }
+
+
 @router.get("/stats/summary")
 def incident_stats(db: Session = Depends(get_db)):
     """Return counts grouped by status and severity."""

@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
@@ -173,6 +174,11 @@ const assignmentColumns: ColumnDef<PIMAssignment>[] = [
     header: "Principal",
     groupable: true,
     value: (a) => a.principal_display_name || a.principal_id,
+    render: (a) => (
+      <Link to={`/users?search=${encodeURIComponent(a.principal_display_name || a.principal_id)}`} onClick={(e) => e.stopPropagation()}>
+        {a.principal_display_name || a.principal_id}
+      </Link>
+    ),
   },
   {
     key: "principal_type",
@@ -293,6 +299,11 @@ const eligibilityColumns: ColumnDef<PIMEligibility>[] = [
     header: "Principal",
     groupable: true,
     value: (e) => e.principal_display_name || e.principal_id,
+    render: (e) => (
+      <Link to={`/users?search=${encodeURIComponent(e.principal_display_name || e.principal_id)}`} onClick={(e2) => e2.stopPropagation()}>
+        {e.principal_display_name || e.principal_id}
+      </Link>
+    ),
   },
   {
     key: "principal_type",
@@ -396,6 +407,11 @@ const activationColumns: ColumnDef<PIMActivation>[] = [
     header: "User",
     groupable: true,
     value: (a) => a.principal_display_name || a.principal_id,
+    render: (a) => (
+      <Link to={`/users?search=${encodeURIComponent(a.principal_display_name || a.principal_id)}`} onClick={(e) => e.stopPropagation()}>
+        {a.principal_display_name || a.principal_id}
+      </Link>
+    ),
   },
   {
     key: "role",

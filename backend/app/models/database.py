@@ -450,6 +450,39 @@ class PolicyCoverageCache(Base):
     policy = relationship("ConditionalAccessPolicy", back_populates="coverage_entries")
 
 
+# ── Entra ID User Directory ───────────────────────────────────
+
+
+class EntraUser(Base):
+    """Cached Entra ID user profile from Microsoft Graph."""
+
+    __tablename__ = "entra_users"
+
+    id = Column(String, primary_key=True)  # Graph user object ID
+    user_principal_name = Column(String, nullable=False, unique=True, index=True)
+    display_name = Column(String, default="")
+    mail = Column(String, default="")
+    job_title = Column(String, default="")
+    department = Column(String, default="")
+    office_location = Column(String, default="")
+    mobile_phone = Column(String, default="")
+    company_name = Column(String, default="")
+    account_enabled = Column(Boolean, default=True)
+    user_type = Column(String, default="")  # Member, Guest
+    created_date_time = Column(DateTime(timezone=True), nullable=True)
+    last_sign_in_date_time = Column(DateTime(timezone=True), nullable=True)
+    assigned_licenses = Column(JSON, default=list)
+    assigned_plans = Column(JSON, default=list)
+    raw_json = Column(JSON, default=dict)
+    synced_at = Column(DateTime(timezone=True), default=utcnow)
+
+    __table_args__ = (
+        Index("ix_entra_user_display_name", "display_name"),
+        Index("ix_entra_user_department", "department"),
+        Index("ix_entra_user_type", "user_type"),
+    )
+
+
 # ── PIM (Privileged Identity Management) Models ──────────────
 
 

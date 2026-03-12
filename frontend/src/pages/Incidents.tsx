@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { fetchIncidents, patchIncident, fetchEvent, type IncidentEntry, type PaginatedResponse, type EventLookupResult } from "../api";
+import { fetchIncidents, patchIncident, recomputeIncidents, fetchEvent, type IncidentEntry, type PaginatedResponse, type EventLookupResult } from "../api";
 import JsonView from "../components/JsonView";
 import SortableTable, { type ColumnDef } from "../components/SortableTable";
 
@@ -11,6 +11,7 @@ export default function Incidents() {
   const [offset, setOffset] = useState(0);
   const [statusFilter, setStatusFilter] = useState("");
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [recomputing, setRecomputing] = useState(false);
   const queryClient = useQueryClient();
 
   const params: Record<string, string> = {
@@ -100,10 +101,34 @@ export default function Incidents() {
     },
   ];
 
+  const handleRecompute = async () => {
+    setRecomputing(true);
+    try {
+      const result = await recomputeIncidents();
+      queryClient.invalidateQueries({ queryKey: ["incidents"] });
+      alert(`Recompute complete: ${result.new_incidents} new incident(s) created.`);
+    } catch (err) {
+      alert(`Recompute failed: ${err}`);
+    } finally {
+      setRecomputing(false);
+    }
+  };
+
   return (
     <div>
-      <h1 className="page-heading">Security Incidents</h1>
-      <p className="page-subtitle">Correlated alerts triggered by detection rules — triage, investigate, and resolve threats</p>
+      <div className="page-header-row">
+        <div>
+          <h1 className="page-heading">Security Incidents</h1>
+          <p className="page-subtitle">Correlated alerts triggered by detection rules — triage, investigate, and resolve threats</p>
+        </div>
+        <button
+          className="btn btn-primary btn-sm"
+          onClick={handleRecompute}
+          disabled={recomputing}
+        >
+          {recomputing ? "Recomputing…" : "Recompute Incidents"}
+        </button>
+      </div>
 
       <div className="filters">
         <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); setOffset(0); }}>

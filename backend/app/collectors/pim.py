@@ -15,6 +15,7 @@ from typing import Any
 import httpx
 
 from app.models.database import (
+    EntraUser,
     PIMActivationRequest,
     PIMRoleAssignment,
     PIMRoleDefinition,
@@ -259,6 +260,69 @@ class PIMCollector:
             )
         return results
 
+    # ── Principal name resolution ─────────────────────────────
+
+    async def _resolve_principal_names(
+        self, token: str, records: list, db: Any
+    ) -> None:
+        """Resolve missing principal_display_name from EntraUser table + Graph API."""
+        # Collect IDs that need resolution
+        unresolved_ids: set[str] = set()
+        for r in records:
+            if not r.principal_display_name and r.principal_id:
+                unresolved_ids.add(r.principal_id)
+
+        if not unresolved_ids:
+            return
+
+        # 1. Look up from EntraUser table (fast DB query)
+        name_map: dict[str, str] = {}
+        existing_users = (
+            db.query(EntraUser.id, EntraUser.display_name)
+            .filter(EntraUser.id.in_(unresolved_ids))
+            .all()
+        )
+        for uid, dname in existing_users:
+            if dname:
+                name_map[uid] = dname
+
+        still_unresolved = unresolved_ids - set(name_map.keys())
+
+        # 2. Graph API fallback for remaining (with concurrency limit)
+        if still_unresolved:
+            sem = asyncio.Semaphore(5)
+
+            async def _fetch_one(uid: str) -> tuple[str, str]:
+                async with sem:
+                    try:
+                        data = await self._get_with_retry(
+                            f"https://graph.microsoft.com/v1.0/users/{uid}",
+                            token,
+                            params={"$select": "id,displayName,userPrincipalName"},
+                        )
+                        return uid, data.get("displayName", "")
+                    except PIMCollectorError:
+                        # 404 or other error — skip gracefully
+                        logger.debug("Could not resolve principal %s", uid)
+                        return uid, ""
+
+            results = await asyncio.gather(
+                *[_fetch_one(uid) for uid in still_unresolved]
+            )
+            for uid, dname in results:
+                if dname:
+                    name_map[uid] = dname
+
+        # 3. Backfill records
+        resolved_count = 0
+        for r in records:
+            if not r.principal_display_name and r.principal_id in name_map:
+                r.principal_display_name = name_map[r.principal_id]
+                resolved_count += 1
+
+        if resolved_count:
+            logger.info("PIM: Resolved %d principal display names", resolved_count)
+
     # ── Full sync orchestrator ────────────────────────────────
 
     async def sync_all(self, token: str, db: Any) -> dict[str, int]:
@@ -279,6 +343,14 @@ class PIMCollector:
         assignments = self.normalize_assignments(raw_assigns, role_map)
         eligibilities = self.normalize_eligibilities(raw_eligs, role_map)
         requests = self.normalize_activation_requests(raw_reqs, role_map)
+
+        # Resolve missing principal display names for eligibilities + requests
+        needs_resolution = [
+            r for r in eligibilities + requests
+            if not r.principal_display_name
+        ]
+        if needs_resolution:
+            await self._resolve_principal_names(token, needs_resolution, db)
 
         # Full replace
         db.query(PIMActivationRequest).delete()

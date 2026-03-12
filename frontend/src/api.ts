@@ -167,6 +167,13 @@ export function fetchIncidentStats() {
   return request<IncidentStats>(`${BASE}/incidents/stats/summary`);
 }
 
+export function recomputeIncidents() {
+  return request<{ status: string; new_incidents: number }>(
+    `${BASE}/incidents/recompute`,
+    { method: "POST" }
+  );
+}
+
 /* ── Rules ─────────────────────────────────────────────────── */
 export interface RuleTrigger {
   source: string;
@@ -701,6 +708,59 @@ export function refreshUserProfiles() {
 export function fetchSignInGroupedByUser(params: Record<string, string> = {}) {
   const qs = new URLSearchParams(params).toString();
   return request<PaginatedResponse<GroupedUserEntry>>(`${BASE}/users/signin-grouped?${qs}`);
+}
+
+/* ── Entra ID User Directory ─────────────────────────────── */
+
+export interface EntraUser {
+  id: string;
+  user_principal_name: string;
+  display_name: string;
+  mail: string;
+  job_title: string;
+  department: string;
+  office_location: string;
+  mobile_phone: string;
+  company_name: string;
+  account_enabled: boolean;
+  user_type: string;
+  created_date_time: string | null;
+  last_sign_in_date_time: string | null;
+  assigned_licenses: any[];
+  assigned_plans: any[];
+  raw_json: Record<string, any>;
+  synced_at: string | null;
+}
+
+export interface DirectoryUserStats {
+  total: number;
+  guests: number;
+  disabled: number;
+  licensed: number;
+}
+
+export function fetchDirectoryUsers(params: Record<string, string> = {}) {
+  const qs = new URLSearchParams(params).toString();
+  return request<PaginatedResponse<EntraUser>>(`${BASE}/directory/users?${qs}`);
+}
+
+export function fetchDirectoryUser(id: string) {
+  return request<EntraUser>(`${BASE}/directory/users/${encodeURIComponent(id)}`);
+}
+
+export function fetchDirectoryUserByUpn(upn: string) {
+  return request<EntraUser>(`${BASE}/directory/users/by-upn/${encodeURIComponent(upn)}`);
+}
+
+export function fetchDirectoryUserStats() {
+  return request<DirectoryUserStats>(`${BASE}/directory/users/stats`);
+}
+
+export function syncDirectoryUsers() {
+  return request<{ status: string; synced: { users: number } }>(
+    `${BASE}/directory/users/sync`,
+    { method: "POST" }
+  );
 }
 
 /* ── PIM (Privileged Identity Management) ────────────────── */

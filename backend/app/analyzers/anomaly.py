@@ -143,11 +143,16 @@ class AnomalyDetector:
             history = user_history.get(user_id, [])
 
             if len(history) < MIN_BASELINE_DAYS:
-                # Not enough data for statistical comparison; use simple 2x check
+                # Not enough data for statistical comparison; use simple 3x check
                 avg = sum(history) / len(history) if history else 0
                 if avg > 0 and count_today > avg * 3:
+                    event_ids = self._fetch_today_event_ids(
+                        model_cls, user_col, time_col, user_id,
+                        today_start, today_end, extra_filters,
+                    )
                     incident = self._create_anomaly_incident(
-                        user_id, source, count_today, avg, 0.0
+                        user_id, source, count_today, avg, 0.0,
+                        len(history), event_ids,
                     )
                     incidents.append(incident)
                 continue
@@ -159,20 +164,58 @@ class AnomalyDetector:
 
             if std == 0:
                 if count_today > mean * 2:
+                    event_ids = self._fetch_today_event_ids(
+                        model_cls, user_col, time_col, user_id,
+                        today_start, today_end, extra_filters,
+                    )
                     incident = self._create_anomaly_incident(
-                        user_id, source, count_today, mean, float("inf")
+                        user_id, source, count_today, mean, float("inf"),
+                        len(history), event_ids,
                     )
                     incidents.append(incident)
                 continue
 
             z_score = (count_today - mean) / std
             if z_score >= self._z_threshold:
+                event_ids = self._fetch_today_event_ids(
+                    model_cls, user_col, time_col, user_id,
+                    today_start, today_end, extra_filters,
+                )
                 incident = self._create_anomaly_incident(
-                    user_id, source, count_today, mean, z_score
+                    user_id, source, count_today, mean, z_score,
+                    len(history), event_ids,
                 )
                 incidents.append(incident)
 
         return incidents
+
+    def _fetch_today_event_ids(
+        self,
+        model_cls: type,
+        user_col: str,
+        time_col: str,
+        user_id: str,
+        today_start: datetime,
+        today_end: datetime,
+        extra_filters: list[Any],
+        max_ids: int = 200,
+    ) -> list[str]:
+        """Fetch event IDs for today's activity that triggered the spike."""
+        q = (
+            select(model_cls.id)
+            .where(
+                and_(
+                    getattr(model_cls, user_col) == user_id,
+                    getattr(model_cls, time_col) >= today_start,
+                    getattr(model_cls, time_col) < today_end,
+                    *extra_filters,
+                )
+            )
+            .order_by(getattr(model_cls, time_col).desc())
+            .limit(max_ids)
+        )
+        rows = self._db.execute(q).scalars().all()
+        return [str(eid) for eid in rows]
 
     def _create_anomaly_incident(
         self,
@@ -181,23 +224,53 @@ class AnomalyDetector:
         count_today: int,
         baseline_avg: float,
         z_score: float,
+        baseline_days: int,
+        event_ids: list[str],
     ) -> Incident:
         severity = Severity.MEDIUM if z_score < 5 else Severity.HIGH
+        multiplier = round(count_today / baseline_avg, 1) if baseline_avg > 0 else 0
+        risk_score = min(int(z_score * 5), 50) if z_score not in (0.0, float("inf")) else 30
+
+        # Build a human-readable description
+        source_label = source.value
+        if z_score == 0.0:
+            z_note = f"Insufficient baseline data ({baseline_days} days < {MIN_BASELINE_DAYS} required); using simple threshold (3× average)."
+        elif z_score == float("inf"):
+            z_note = "Zero variance in historical data — any increase is anomalous."
+        else:
+            z_note = f"Z-score: {z_score:.2f} (threshold: {self._z_threshold})."
+
+        description = (
+            f"Anomalous activity spike detected for user {user_id} "
+            f"in {source_label} logs.\n\n"
+            f"**Today's event count:** {count_today}\n"
+            f"**Baseline average:** {baseline_avg:.1f} events/day "
+            f"(over {baseline_days} day{'s' if baseline_days != 1 else ''} of history)\n"
+            f"**Spike multiplier:** {multiplier}× the baseline average\n"
+            f"**{z_note}**\n\n"
+            f"**Evidence:** {len(event_ids)} event{'s' if len(event_ids) != 1 else ''} "
+            f"collected from today's activity (showing up to 200 most recent). "
+            f"Expand the evidence section to inspect individual events."
+        )
+
         incident = Incident(
-            title=f"Anomaly: {source.value} activity spike – {user_id}",
+            title=f"Anomaly: {source_label} activity spike – {user_id}",
+            description=description,
             severity=severity,
             status=IncidentStatus.OPEN,
             user_id=user_id,
-            risk_score_at_creation=min(int(z_score * 5), 50) if z_score != float("inf") else 30,
-            correlated_event_ids=[],
+            trigger_event_source=source_label,
+            correlated_event_ids=event_ids,
+            risk_score_at_creation=risk_score,
         )
         self._db.add(incident)
         logger.warning(
-            "Anomaly detected: user=%s source=%s today=%d baseline_avg=%.1f z=%.2f",
+            "Anomaly detected: user=%s source=%s today=%d baseline_avg=%.1f z=%.2f events=%d",
             user_id,
             source.value,
             count_today,
             baseline_avg,
             z_score,
+            len(event_ids),
         )
         return incident

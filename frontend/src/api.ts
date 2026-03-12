@@ -168,18 +168,48 @@ export function fetchIncidentStats() {
 }
 
 /* ── Rules ─────────────────────────────────────────────────── */
+export interface RuleTrigger {
+  source: string;
+  conditions: string[];
+}
+
+export interface RuleCorrelation {
+  source: string;
+  direction: string;
+  window_minutes: number;
+  conditions: string[];
+}
+
+export interface RuleWatchWindow {
+  enabled: boolean;
+  duration_days: number;
+  risk_points: number;
+}
+
+export interface RuleMetaRule {
+  required_rule_slugs: string[];
+  min_active_windows: number;
+}
+
 export interface RuleEntry {
   id: number;
   slug: string;
   name: string;
   description: string;
+  category: string;
   severity: string;
   risk_points: number;
   watch_window_days: number;
+  watch_window: RuleWatchWindow;
+  triggers: RuleTrigger[];
+  threshold: string | null;
+  correlations: RuleCorrelation[];
+  meta_rule: RuleMetaRule | null;
+  mitre_tactics: string[];
+  mitre_techniques: string[];
   rule_json: unknown;
   enabled: boolean;
   is_system: boolean;
-  created_at: string;
 }
 
 export function fetchRules(params: Record<string, string> = {}) {

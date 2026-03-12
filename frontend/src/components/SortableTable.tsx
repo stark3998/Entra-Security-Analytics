@@ -11,6 +11,8 @@ export interface ColumnDef<T> {
   sortable?: boolean;
   /** Whether this column can be grouped by (default false) */
   groupable?: boolean;
+  /** Whether this column is filterable (default false) */
+  filterable?: boolean;
   /** Accessor to get the raw value for sorting/grouping */
   value: (row: T) => string | number | boolean | null | undefined;
   /** Custom cell renderer (defaults to String(value)) */
@@ -67,12 +69,19 @@ export default function SortableTable<T>({
 }: SortableTableProps<T>) {
   const [sort, setSort] = useState<SortState | null>(defaultSort ?? null);
   const [groupByKey, setGroupByKey] = useState<string>("");
+  const [columnFilters, setColumnFilters] = useState<Record<string, string>>({});
 
   const hasExpand = onToggleExpand != null && renderExpanded != null;
   const totalCols = expandColSpan ?? columns.length + (hasExpand ? 1 : 0);
 
   const groupableColumns = columns.filter((c) => c.groupable);
   const shouldShowGroupBy = showGroupBy ?? groupableColumns.length > 0;
+  const filterableColumns = columns.filter((c) => c.filterable);
+  const hasFilters = filterableColumns.length > 0;
+
+  const setFilter = useCallback((key: string, value: string) => {
+    setColumnFilters((prev) => ({ ...prev, [key]: value }));
+  }, []);
 
   // Toggle sort on column header click
   const handleSort = useCallback(
@@ -87,9 +96,23 @@ export default function SortableTable<T>({
     []
   );
 
-  // Sort + group data
+  // Filter + sort + group data
   const { groups, sortedFlat } = useMemo(() => {
     let items = [...data];
+
+    // Filter
+    const activeFilters = Object.entries(columnFilters).filter(([, v]) => v.trim() !== "");
+    if (activeFilters.length > 0) {
+      items = items.filter((row) =>
+        activeFilters.every(([key, filterText]) => {
+          const col = columns.find((c) => c.key === key);
+          if (!col) return true;
+          const raw = col.value(row);
+          const cellText = raw == null ? "" : String(raw);
+          return cellText.toLowerCase().includes(filterText.trim().toLowerCase());
+        })
+      );
+    }
 
     // Sort
     if (sort) {
@@ -122,7 +145,7 @@ export default function SortableTable<T>({
     }
 
     return { groups: null, sortedFlat: items };
-  }, [data, sort, groupByKey, columns]);
+  }, [data, sort, groupByKey, columns, columnFilters]);
 
   // Render header cell
   const renderHeader = (col: ColumnDef<T>) => {
@@ -195,6 +218,25 @@ export default function SortableTable<T>({
               {hasExpand && <th style={{ width: 28 }}></th>}
               {columns.map(renderHeader)}
             </tr>
+            {hasFilters && (
+              <tr className="filter-row">
+                {hasExpand && <th></th>}
+                {columns.map((col) => (
+                  <th key={col.key} className="filter-cell">
+                    {col.filterable ? (
+                      <input
+                        type="text"
+                        className="column-filter-input"
+                        placeholder={`Filter ${col.header}…`}
+                        value={columnFilters[col.key] ?? ""}
+                        onChange={(e) => setFilter(col.key, e.target.value)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : null}
+                  </th>
+                ))}
+              </tr>
+            )}
           </thead>
 
           {groups ? (

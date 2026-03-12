@@ -150,7 +150,10 @@ function IncidentDetails({ inc }: { inc: IncidentEntry }) {
       {inc.description && (
         <div className="risk-alert" style={{ marginBottom: "1rem" }}>
           <strong>Description:</strong>
-          <p style={{ margin: "0.25rem 0 0" }}>{inc.description}</p>
+          <div
+            style={{ margin: "0.25rem 0 0", whiteSpace: "pre-wrap", lineHeight: 1.6 }}
+            dangerouslySetInnerHTML={{ __html: renderSimpleMarkdown(inc.description) }}
+          />
         </div>
       )}
 
@@ -342,4 +345,12 @@ function Pagination({
 function fmtDate(iso: string | null): string {
   if (!iso) return "–";
   return new Date(iso).toLocaleString();
+}
+
+function renderSimpleMarkdown(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 }

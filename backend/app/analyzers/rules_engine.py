@@ -374,14 +374,38 @@ class CorrelationRulesEngine:
             if recent:
                 continue
 
+            window_details = []
+            for ws in windows:
+                rule_name = ""
+                if ws.rule_id:
+                    r = self._db.query(CorrelationRule).get(ws.rule_id)
+                    rule_name = r.name if r else f"Rule #{ws.rule_id}"
+                window_details.append(
+                    f"  - {rule_name}: {ws.risk_contribution} pts "
+                    f"(event: {ws.trigger_event_id or '–'}, "
+                    f"source: {ws.trigger_event_source or '–'})"
+                )
+            total_risk = sum(ws.risk_contribution for ws in windows)
+            meta_desc = (
+                f"Meta-rule **{rule_row.name}** triggered for user {uid}.\n\n"
+                f"**Active watch windows:** {len(windows)} "
+                f"(minimum required: {meta.min_active_windows})\n"
+                f"**Combined risk contribution:** {total_risk} pts\n\n"
+                f"**Contributing watch windows:**\n"
+                + "\n".join(window_details)
+            )
+            if rule_row.description:
+                meta_desc = rule_row.description + "\n\n" + meta_desc
+
             incident = Incident(
                 title=f"[Meta] {rule_row.name} – {uid}",
+                description=meta_desc,
                 severity=rule_row.severity,
                 status=IncidentStatus.OPEN,
                 rule_id=rule_row.id,
                 user_id=uid,
                 correlated_event_ids=[ws.trigger_event_id for ws in windows if ws.trigger_event_id],
-                risk_score_at_creation=sum(ws.risk_contribution for ws in windows),
+                risk_score_at_creation=total_risk,
             )
             self._db.add(incident)
             incidents.append(incident)
@@ -405,12 +429,42 @@ class CorrelationRulesEngine:
         source: LogSource,
     ) -> Incident:
         event_id = getattr(record, "id", "")
+
+        # Build a description from rule metadata + trigger context
+        desc_parts = []
+        if rule_row.description:
+            desc_parts.append(rule_row.description)
+        desc_parts.append(
+            f"**Triggered by:** {source.value} event from user {user_id}"
+        )
+        if event_id:
+            desc_parts.append(f"**Trigger event ID:** {event_id}")
+        desc_parts.append(
+            f"**Rule severity:** {rule_row.severity.value} | "
+            f"**Risk points:** {rule_row.risk_points}"
+        )
+        if defn.watch_window.enabled:
+            desc_parts.append(
+                f"**Watch window:** {defn.watch_window.duration_days} day(s), "
+                f"{defn.watch_window.risk_points} pts"
+            )
+        # Add MITRE info if available
+        if defn.mitre_tactics:
+            desc_parts.append(f"**MITRE Tactics:** {', '.join(defn.mitre_tactics)}")
+        if defn.mitre_techniques:
+            desc_parts.append(f"**MITRE Techniques:** {', '.join(defn.mitre_techniques)}")
+
+        description = "\n".join(desc_parts)
+
         incident = Incident(
             title=f"{rule_row.name} – {user_id}",
+            description=description,
             severity=rule_row.severity,
             status=IncidentStatus.OPEN,
             rule_id=rule_row.id,
             user_id=user_id,
+            trigger_event_id=event_id,
+            trigger_event_source=source.value,
             correlated_event_ids=[event_id] if event_id else [],
             risk_score_at_creation=rule_row.risk_points,
         )

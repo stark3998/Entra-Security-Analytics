@@ -187,14 +187,113 @@ def delete_rule(rule_id: int, db: Session = Depends(get_db)):
 # ── Helpers ───────────────────────────────────────────────────────────────
 
 def _rule_to_dict(r: CorrelationRule) -> dict:
+    defn = r.rule_definition or {}
+
+    # Extract human-readable trigger summaries
+    triggers_summary = []
+    for t in defn.get("triggers", []):
+        source = t.get("source", "?")
+        matchers = t.get("matchers", [])
+        parts = []
+        for m in matchers:
+            field = m.get("field", "")
+            op = m.get("operator", "")
+            val = m.get("value", "")
+            if op == "in" and isinstance(val, list):
+                val_str = ", ".join(str(v) for v in val[:5])
+                if len(val) > 5:
+                    val_str += f" (+{len(val) - 5} more)"
+                parts.append(f"{field} IN [{val_str}]")
+            elif op == "eq":
+                parts.append(f"{field} = {val}")
+            elif op == "contains":
+                parts.append(f"{field} CONTAINS '{val}'")
+            elif op == "exists":
+                parts.append(f"{field} EXISTS")
+            elif op == "not_exists":
+                parts.append(f"{field} NOT EXISTS")
+            elif op in ("gt", "lt", "neq", "not_contains", "not_in", "regex"):
+                op_label = {"gt": ">", "lt": "<", "neq": "!=", "not_contains": "NOT CONTAINS", "not_in": "NOT IN", "regex": "REGEX"}.get(op, op)
+                parts.append(f"{field} {op_label} {val}")
+            else:
+                parts.append(f"{field} {op} {val}")
+        triggers_summary.append({"source": source, "conditions": parts})
+
+    # Extract threshold summary
+    threshold = defn.get("threshold")
+    threshold_summary = None
+    if threshold:
+        agg = threshold.get("aggregation", "count").upper()
+        op_map = {"gt": ">", "lt": "<", "eq": "=", "neq": "!="}
+        op = op_map.get(threshold.get("operator", "gt"), threshold.get("operator", ">"))
+        val = threshold.get("value", 0)
+        window = threshold.get("window_minutes", 60)
+        field = threshold.get("field")
+        group = threshold.get("group_by", "user")
+        agg_str = f"{agg}({field})" if field else agg
+        threshold_summary = f"{agg_str} {op} {val} within {window} min (grouped by {group})"
+
+    # Extract correlation summaries
+    correlations_summary = []
+    for c in defn.get("correlations", []):
+        sec_source = c.get("secondary_source", "?")
+        direction = c.get("direction", "after")
+        window = c.get("window_minutes", 1440)
+        sec_matchers = c.get("secondary_matchers", [])
+        cond_parts = []
+        for m in sec_matchers:
+            f = m.get("field", "")
+            o = m.get("operator", "")
+            v = m.get("value", "")
+            if o == "in" and isinstance(v, list):
+                cond_parts.append(f"{f} IN [{', '.join(str(x) for x in v)}]")
+            else:
+                cond_parts.append(f"{f} {o} {v}")
+        correlations_summary.append({
+            "source": sec_source,
+            "direction": direction,
+            "window_minutes": window,
+            "conditions": cond_parts,
+        })
+
+    # Watch window config
+    ww = defn.get("watch_window", {})
+
+    # MITRE
+    mitre_tactics = defn.get("mitre_tactics", [])
+    mitre_techniques = defn.get("mitre_techniques", [])
+
+    # Is meta-rule?
+    meta_rule = defn.get("meta_rule")
+    meta_summary = None
+    if meta_rule:
+        required = meta_rule.get("required_rule_slugs", [])
+        min_windows = meta_rule.get("min_active_windows", 2)
+        meta_summary = {
+            "required_rule_slugs": required,
+            "min_active_windows": min_windows,
+        }
+
     return {
         "id": r.id,
         "slug": r.slug,
         "name": r.name,
-        "description": r.description,
+        "description": r.description or defn.get("description", ""),
+        "category": r.category or "",
         "severity": r.severity.value if r.severity else None,
         "risk_points": r.risk_points,
         "watch_window_days": r.watch_window_days,
+        "watch_window": {
+            "enabled": ww.get("enabled", True),
+            "duration_days": ww.get("duration_days", r.watch_window_days or 0),
+            "risk_points": ww.get("risk_points", 0),
+        },
+        "triggers": triggers_summary,
+        "threshold": threshold_summary,
+        "correlations": correlations_summary,
+        "meta_rule": meta_summary,
+        "mitre_tactics": mitre_tactics,
+        "mitre_techniques": mitre_techniques,
         "rule_json": r.rule_definition,
         "enabled": r.enabled,
         "is_system": r.is_system,

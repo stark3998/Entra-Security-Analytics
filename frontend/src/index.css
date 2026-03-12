@@ -244,6 +244,40 @@ tbody tr:hover {
   color: var(--accent);
 }
 
+/* ── Column Filter Row (inside SortableTable thead) ──────── */
+tr.filter-row {
+  display: table-row;          /* override any flex from generic .filter-row */
+}
+tr.filter-row th {
+  padding: 0.2rem 0.4rem 0.35rem;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border-color);
+  border-top: none;
+  font-weight: 400;
+}
+
+.column-filter-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.column-filter-input::placeholder {
+  color: var(--text-secondary);
+  opacity: 0.5;
+  font-size: 0.72rem;
+}
+.column-filter-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1.5px rgba(99, 102, 241, 0.15);
+}
+
 /* ── Group-By Bar ──────────────────────────────────────────── */
 .group-by-bar {
   display: flex;
@@ -958,8 +992,8 @@ tbody tr:hover {
 .gap-issues { list-style: disc inside; font-size: 0.85rem; }
 .gap-issues li { margin-bottom: 2px; }
 
-/* Filter row */
-.filter-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
+/* Filter row (non-table usage, e.g. CAPolicies) */
+div.filter-row { display: flex; align-items: center; gap: 12px; margin-bottom: 8px; }
 .filter-info { font-size: 0.82rem; color: var(--text-secondary); }
 
 /* ── User Profiles Page ─────────────────────────────────────── */

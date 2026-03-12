@@ -1007,22 +1007,62 @@ def _make_slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
+_CATEGORY_MAP = {
+    "1": "Identity & Authentication",
+    "2": "Privilege Escalation",
+    "3": "Data Exfiltration & DLP",
+    "4": "Consent & Application Abuse",
+    "5": "Shadow IT & Power Platform",
+    "M": "Meta-Rules (Multi-Signal)",
+}
+
+
+def _category_from_name(name: str) -> str:
+    """Derive a category from the rule name prefix (e.g. '1.1 ...' → 'Identity & Authentication')."""
+    prefix = name.split(".")[0].split(" ")[0]
+    return _CATEGORY_MAP.get(prefix, "")
+
+
 def seed_rules(db) -> int:
     """Insert all seed rules that do not already exist.
 
+    Also back-fills description and category on existing rules if they are empty.
     Returns the number of newly inserted rules.
     """
+    import logging
+    logger = logging.getLogger(__name__)
     from sqlalchemy import select as sa_select
+
     existing_names: set[str] = set(
         db.execute(sa_select(CorrelationRule.name)).scalars().all()
     )
     inserted = 0
+    updated = 0
     for rule_data in ALL_SEED_RULES:
+        defn = rule_data["rule_definition"]
+        desc = defn.get("description", "")
+        cat = _category_from_name(rule_data["name"])
+
         if rule_data["name"] in existing_names:
+            # Back-fill description/category on existing rules if missing
+            existing = db.execute(
+                sa_select(CorrelationRule).where(
+                    CorrelationRule.name == rule_data["name"]
+                )
+            ).scalars().first()
+            if existing and (not existing.description or not existing.category):
+                if not existing.description and desc:
+                    existing.description = desc
+                if not existing.category and cat:
+                    existing.category = cat
+                updated += 1
             continue
+
         row = CorrelationRule(
             slug=_make_slug(rule_data["name"]),
             name=rule_data["name"],
+            description=desc,
+            category=cat,
             severity=rule_data["severity"],
             risk_points=rule_data["risk_points"],
             watch_window_days=rule_data["watch_window_days"],
@@ -1033,4 +1073,6 @@ def seed_rules(db) -> int:
         db.add(row)
         inserted += 1
     db.flush()
+    if updated:
+        logger.info("Updated %d existing rules with descriptions/categories", updated)
     return inserted

@@ -686,9 +686,38 @@ export interface SignInSummary {
   conditional_access_status: string;
 }
 
+export interface AuditLogSummary {
+  id: string;
+  activity_datetime: string | null;
+  activity_display_name: string;
+  category: string;
+  result: string;
+  result_reason: string;
+  initiated_by_user: string;
+  initiated_by_app: string;
+  target_resources: unknown[];
+  correlation_id: string;
+}
+
+export interface ActivityLogSummary {
+  id: string;
+  creation_time: string | null;
+  operation: string;
+  workload: string;
+  source: string | null;
+  user_id: string;
+  client_ip: string;
+  result_status: string;
+  object_id: string;
+  item_type: string;
+  source_file_name: string;
+}
+
 export interface UserProfileDetail {
   profile: UserProfile;
   recent_signin_logs: SignInSummary[];
+  recent_audit_logs: AuditLogSummary[];
+  recent_activity_logs: ActivityLogSummary[];
 }
 
 export interface GroupedUserEntry {

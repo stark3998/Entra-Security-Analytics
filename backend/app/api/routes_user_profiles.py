@@ -10,7 +10,7 @@ from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
 from app.analyzers.user_profiles import refresh_all_profiles, refresh_profile_for_user
-from app.models.database import SignInLog, UserSignInProfile, get_db
+from app.models.database import AuditLog, O365ActivityLog, SignInLog, UserSignInProfile, get_db
 
 logger = logging.getLogger(__name__)
 
@@ -65,23 +65,43 @@ def list_user_profiles(
 
 @router.get("/profiles/{upn}")
 def get_user_profile(upn: str, db: Session = Depends(get_db)):
-    """Return detailed profile for a single user, plus recent sign-in logs."""
+    """Return detailed profile for a single user, plus logs across all services."""
     profile = db.query(UserSignInProfile).filter_by(user_principal_name=upn).first()
     if not profile:
         return {"error": "Profile not found", "user_principal_name": upn}
 
-    # Fetch recent sign-in logs for this user (latest 50)
-    recent_logs = (
+    # Fetch recent sign-in logs (latest 100)
+    recent_signin = (
         db.query(SignInLog)
         .filter(SignInLog.user_principal_name == upn)
         .order_by(desc(SignInLog.created_date_time))
-        .limit(50)
+        .limit(100)
+        .all()
+    )
+
+    # Fetch audit logs initiated by this user (latest 100)
+    recent_audit = (
+        db.query(AuditLog)
+        .filter(AuditLog.initiated_by_user_upn == upn)
+        .order_by(desc(AuditLog.activity_date_time))
+        .limit(100)
+        .all()
+    )
+
+    # Fetch O365/SharePoint/PowerApps activity logs for this user (latest 100)
+    recent_activity = (
+        db.query(O365ActivityLog)
+        .filter(O365ActivityLog.user_id == upn)
+        .order_by(desc(O365ActivityLog.creation_time))
+        .limit(100)
         .all()
     )
 
     return {
         "profile": _profile_to_dict(profile),
-        "recent_signin_logs": [_signin_summary(r) for r in recent_logs],
+        "recent_signin_logs": [_signin_summary(r) for r in recent_signin],
+        "recent_audit_logs": [_audit_summary(r) for r in recent_audit],
+        "recent_activity_logs": [_activity_summary(r) for r in recent_activity],
     }
 
 
@@ -175,4 +195,35 @@ def _signin_summary(r: SignInLog) -> dict:
         "app_display_name": r.app_display_name,
         "status_error_code": r.status_error_code,
         "conditional_access_status": r.conditional_access_status,
+    }
+
+
+def _audit_summary(r: AuditLog) -> dict:
+    return {
+        "id": r.id,
+        "activity_datetime": r.activity_date_time.isoformat() if r.activity_date_time else None,
+        "activity_display_name": r.activity_display_name,
+        "category": r.category,
+        "result": r.result,
+        "result_reason": r.result_reason,
+        "initiated_by_user": r.initiated_by_user_upn,
+        "initiated_by_app": r.initiated_by_app_display_name,
+        "target_resources": r.target_resources or [],
+        "correlation_id": r.correlation_id,
+    }
+
+
+def _activity_summary(r: O365ActivityLog) -> dict:
+    return {
+        "id": r.id,
+        "creation_time": r.creation_time.isoformat() if r.creation_time else None,
+        "operation": r.operation,
+        "workload": r.workload,
+        "source": r.source.value if r.source else None,
+        "user_id": r.user_id,
+        "client_ip": r.client_ip,
+        "result_status": r.result_status,
+        "object_id": r.object_id,
+        "item_type": r.item_type,
+        "source_file_name": r.source_file_name,
     }

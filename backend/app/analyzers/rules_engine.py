@@ -91,10 +91,11 @@ class CorrelationRulesEngine:
                 if not user_id:
                     continue
 
-                # Skip if this (user, rule) already produced an incident
-                key = (user_id, rule_row.id)
-                if key in fired:
-                    continue
+                # For threshold rules, skip if this (user, rule) already fired
+                if defn.threshold:
+                    key = (user_id, rule_row.id)
+                    if key in fired:
+                        continue
 
                 # Threshold check (optional)
                 if defn.threshold and not self._check_threshold(
@@ -121,7 +122,8 @@ class CorrelationRulesEngine:
                     correlated_ids=matching_ids,
                 )
                 incidents.append(incident)
-                fired.add(key)
+                if defn.threshold:
+                    fired.add((user_id, rule_row.id))
 
                 if defn.watch_window.enabled:
                     self._open_watch_window(rule_row, defn, record, user_id, source)

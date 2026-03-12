@@ -162,6 +162,34 @@ def get_app_settings(db: Session = Depends(get_db)):
     )
 
 
+@settings_router.post("/clear-database")
+def clear_database(db: Session = Depends(get_db)):
+    """Delete all collected data (logs, incidents, users, PIM, etc.) but preserve settings."""
+    from sqlalchemy import text
+
+    from app.models.database import Base
+
+    # Preserve app_settings — delete everything else
+    preserve = {"app_settings"}
+    tables = [t.name for t in reversed(Base.metadata.sorted_tables) if t.name not in preserve]
+
+    deleted: dict[str, int] = {}
+    for table in tables:
+        count = db.execute(text(f'SELECT COUNT(*) FROM "{table}"')).scalar() or 0
+        if count:
+            db.execute(text(f'DELETE FROM "{table}"'))
+            deleted[table] = count
+
+    db.commit()
+
+    # Vacuum to reclaim disk space (must run outside transaction)
+    db.execute(text("VACUUM"))
+
+    total = sum(deleted.values())
+    logger.info("Database cleared: %d rows deleted across %d tables", total, len(deleted))
+    return {"status": "ok", "deleted_rows": total, "tables": deleted}
+
+
 @settings_router.put("", response_model=SettingsResponse)
 def update_app_settings(
     body: SettingsUpdate,

@@ -394,6 +394,13 @@ export function updateSettings(data: SettingsUpdate) {
   });
 }
 
+export function clearDatabase() {
+  return request<{ status: string; deleted_rows: number; tables: Record<string, number> }>(
+    `${BASE}/settings/clear-database`,
+    { method: "POST" }
+  );
+}
+
 /* ── Conditional Access Policies ──────────────────────────── */
 
 export interface CAPolicy {

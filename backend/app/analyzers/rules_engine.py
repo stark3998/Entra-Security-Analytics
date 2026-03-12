@@ -72,6 +72,9 @@ class CorrelationRulesEngine:
         """
         rules = self._load_enabled_rules()
         incidents: list[Incident] = []
+        # Track (user_id, rule_id) that already fired — prevents N incidents
+        # for threshold rules where every event in the batch passes.
+        fired: set[tuple[str, int]] = set()
 
         for rule_row in rules:
             defn = RuleDefinition.model_validate(rule_row.rule_definition)
@@ -88,6 +91,11 @@ class CorrelationRulesEngine:
                 if not user_id:
                     continue
 
+                # Skip if this (user, rule) already produced an incident
+                key = (user_id, rule_row.id)
+                if key in fired:
+                    continue
+
                 # Threshold check (optional)
                 if defn.threshold and not self._check_threshold(
                     user_id, source, defn.threshold, record
@@ -100,8 +108,20 @@ class CorrelationRulesEngine:
                 ):
                     continue
 
-                incident = self._create_incident(rule_row, defn, record, user_id, source)
+                # For threshold rules, collect all matching event IDs
+                if defn.threshold:
+                    matching_ids = self._collect_window_event_ids(
+                        user_id, source, defn, records
+                    )
+                else:
+                    matching_ids = None
+
+                incident = self._create_incident(
+                    rule_row, defn, record, user_id, source,
+                    correlated_ids=matching_ids,
+                )
                 incidents.append(incident)
+                fired.add(key)
 
                 if defn.watch_window.enabled:
                     self._open_watch_window(rule_row, defn, record, user_id, source)
@@ -265,6 +285,25 @@ class CorrelationRulesEngine:
 
     # --- Correlation (secondary events) ----------------------------------
 
+    def _collect_window_event_ids(
+        self,
+        user_id: str,
+        source: LogSource,
+        defn: RuleDefinition,
+        records: list[Any],
+    ) -> list[str]:
+        """Collect IDs of all records in the batch matching triggers for this user."""
+        ids: list[str] = []
+        for r in records:
+            r_user = self._extract_user_id(r, source)
+            if r_user != user_id:
+                continue
+            if self._any_trigger_matches(r, source, defn.triggers):
+                eid = getattr(r, "id", "")
+                if eid:
+                    ids.append(eid)
+        return ids
+
     def _check_correlations(
         self,
         user_id: str,
@@ -427,8 +466,11 @@ class CorrelationRulesEngine:
         record: Any,
         user_id: str,
         source: LogSource,
+        *,
+        correlated_ids: list[str] | None = None,
     ) -> Incident:
         event_id = getattr(record, "id", "")
+        all_ids = correlated_ids or ([event_id] if event_id else [])
 
         # Build a description from rule metadata + trigger context
         desc_parts = []
@@ -439,6 +481,8 @@ class CorrelationRulesEngine:
         )
         if event_id:
             desc_parts.append(f"**Trigger event ID:** {event_id}")
+        if len(all_ids) > 1:
+            desc_parts.append(f"**Correlated events:** {len(all_ids)}")
         desc_parts.append(
             f"**Rule severity:** {rule_row.severity.value} | "
             f"**Risk points:** {rule_row.risk_points}"
@@ -465,7 +509,7 @@ class CorrelationRulesEngine:
             user_id=user_id,
             trigger_event_id=event_id,
             trigger_event_source=source.value,
-            correlated_event_ids=[event_id] if event_id else [],
+            correlated_event_ids=all_ids,
             risk_score_at_creation=rule_row.risk_points,
         )
         self._db.add(incident)

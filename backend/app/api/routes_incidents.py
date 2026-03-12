@@ -109,8 +109,8 @@ def update_incident(incident_id: int, body: IncidentUpdate, db: Session = Depend
 def recompute_incidents(db: Session = Depends(get_db)):
     """Re-run correlation rules, meta-rules, and anomaly detection on all existing logs.
 
-    This evaluates *all* persisted log records against enabled rules,
-    creating new incidents for any matches that don't already exist.
+    Deduplicates against existing incidents so the same event+rule pair
+    doesn't produce a second incident.
     """
     import logging as _logging
 
@@ -119,44 +119,72 @@ def recompute_incidents(db: Session = Depends(get_db)):
     from app.models.database import AuditLog, LogSource, O365ActivityLog, SignInLog
 
     _logger = _logging.getLogger(__name__)
-    all_incidents = []
 
-    # 1. Evaluate correlation rules on all sign-in logs
+    # Build dedup set: (trigger_event_id, rule_id) for existing incidents
+    existing_keys: set[tuple[str, int | None]] = set()
+    for eid, rid in db.query(Incident.trigger_event_id, Incident.rule_id).all():
+        if eid:
+            existing_keys.add((eid, rid))
+    # Also track existing anomaly titles to avoid duplicates
+    existing_anomaly_titles: set[str] = set()
+    for (t,) in db.query(Incident.title).filter(Incident.rule_id.is_(None)).all():
+        existing_anomaly_titles.add(t)
+
+    def _dedup_and_commit(new_incidents: list, label: str) -> list:
+        """Remove incidents that already exist, expunge dupes from session."""
+        kept = []
+        for inc in new_incidents:
+            key = (inc.trigger_event_id, inc.rule_id)
+            is_anomaly = inc.rule_id is None
+            if is_anomaly and inc.title in existing_anomaly_titles:
+                db.expunge(inc)
+                continue
+            if not is_anomaly and key in existing_keys:
+                db.expunge(inc)
+                continue
+            # Track for future dedup within this run
+            if is_anomaly:
+                existing_anomaly_titles.add(inc.title)
+            else:
+                existing_keys.add(key)
+            kept.append(inc)
+        db.commit()
+        _logger.info("Recompute: %d new incidents from %s (%d duplicates skipped)",
+                      len(kept), label, len(new_incidents) - len(kept))
+        return kept
+
+    all_incidents: list = []
+
+    # 1. Correlation rules on sign-in logs
     try:
         sign_in_logs = db.query(SignInLog).all()
         if sign_in_logs:
             engine = CorrelationRulesEngine(db)
             incs = engine.evaluate_new_logs(sign_in_logs, LogSource.ENTRA_SIGNIN)
-            all_incidents.extend(incs)
-            db.commit()
-            _logger.info("Recompute: %d incidents from sign-in logs", len(incs))
+            all_incidents.extend(_dedup_and_commit(incs, "sign-in logs"))
     except Exception:
         _logger.exception("Recompute: sign-in log evaluation failed")
         db.rollback()
 
-    # 2. Evaluate correlation rules on all audit logs
+    # 2. Correlation rules on audit logs
     try:
         audit_logs = db.query(AuditLog).all()
         if audit_logs:
             engine = CorrelationRulesEngine(db)
             incs = engine.evaluate_new_logs(audit_logs, LogSource.ENTRA_AUDIT)
-            all_incidents.extend(incs)
-            db.commit()
-            _logger.info("Recompute: %d incidents from audit logs", len(incs))
+            all_incidents.extend(_dedup_and_commit(incs, "audit logs"))
     except Exception:
         _logger.exception("Recompute: audit log evaluation failed")
         db.rollback()
 
-    # 3. Evaluate correlation rules on O365 activity logs
+    # 3. Correlation rules on O365 activity logs
     for source in [LogSource.OFFICE365, LogSource.SHAREPOINT, LogSource.POWERAPPS]:
         try:
             logs = db.query(O365ActivityLog).filter(O365ActivityLog.source == source).all()
             if logs:
                 engine = CorrelationRulesEngine(db)
                 incs = engine.evaluate_new_logs(logs, source)
-                all_incidents.extend(incs)
-                db.commit()
-                _logger.info("Recompute: %d incidents from %s", len(incs), source.value)
+                all_incidents.extend(_dedup_and_commit(incs, source.value))
         except Exception:
             _logger.exception("Recompute: %s evaluation failed", source.value)
             db.rollback()
@@ -165,9 +193,7 @@ def recompute_incidents(db: Session = Depends(get_db)):
     try:
         engine = CorrelationRulesEngine(db)
         meta_incs = engine.evaluate_meta_rules()
-        all_incidents.extend(meta_incs)
-        db.commit()
-        _logger.info("Recompute: %d incidents from meta-rules", len(meta_incs))
+        all_incidents.extend(_dedup_and_commit(meta_incs, "meta-rules"))
     except Exception:
         _logger.exception("Recompute: meta-rule evaluation failed")
         db.rollback()
@@ -176,9 +202,7 @@ def recompute_incidents(db: Session = Depends(get_db)):
     try:
         detector = AnomalyDetector(db)
         anomaly_incs = detector.detect_all()
-        all_incidents.extend(anomaly_incs)
-        db.commit()
-        _logger.info("Recompute: %d incidents from anomaly detection", len(anomaly_incs))
+        all_incidents.extend(_dedup_and_commit(anomaly_incs, "anomaly detection"))
     except Exception:
         _logger.exception("Recompute: anomaly detection failed")
         db.rollback()

@@ -13,6 +13,7 @@ import { clearAuthConfigCache } from "../auth/msalConfig";
 import {
   fetchSettings,
   updateSettings,
+  clearDatabase,
   SettingsResponse,
   SettingsUpdate,
 } from "../api";
@@ -23,6 +24,7 @@ export default function Settings() {
   const [settings, setSettings] = useState<SettingsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [clearing, setClearing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
 
@@ -84,6 +86,23 @@ export default function Settings() {
       setError(err instanceof Error ? err.message : "Failed to save settings");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleClearDatabase = async () => {
+    if (!window.confirm("This will permanently delete ALL collected data (logs, incidents, users, PIM data, etc.). Settings will be preserved.\n\nAre you sure?")) {
+      return;
+    }
+    setError(null);
+    setSuccess(null);
+    setClearing(true);
+    try {
+      const result = await clearDatabase();
+      setSuccess(`Database cleared: ${result.deleted_rows.toLocaleString()} rows deleted.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to clear database");
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -303,6 +322,24 @@ export default function Settings() {
           </button>
         </div>
       </form>
+
+      {/* Danger zone */}
+      <section className="settings-section" style={{ borderTop: "2px solid var(--color-error, #e74c3c)", marginTop: "2rem", paddingTop: "1.5rem" }}>
+        <h3 style={{ color: "var(--color-error, #e74c3c)" }}>Danger Zone</h3>
+        <p className="section-desc">
+          Permanently delete all collected data — logs, incidents, users, PIM data, policies, and profiles.
+          Settings and app registration credentials will be preserved.
+        </p>
+        <button
+          type="button"
+          className="btn btn-danger"
+          onClick={handleClearDatabase}
+          disabled={clearing}
+          style={{ backgroundColor: "var(--color-error, #e74c3c)", color: "#fff", border: "none" }}
+        >
+          {clearing ? "Clearing..." : "Clear All Data"}
+        </button>
+      </section>
     </div>
   );
 }
